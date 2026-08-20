@@ -25,6 +25,7 @@ _ARCH_REMAP = {
     "GPT2LMHeadModel": "DMIGPT2CompareLMHeadModel",
     "GraniteForCausalLM": "DMIGraniteCompareForCausalLM",
     "JambaForCausalLM": "DMIJambaCompareForCausalLM",
+    "KimiK3ForConditionalGeneration": "DMIKimiK3CompareForConditionalGeneration",
     "Lfm2ForCausalLM": "DMILfm2CompareForCausalLM",
     "MiniCPMForCausalLM": "DMIMiniCPMCompareForCausalLM",
     "MistralForCausalLM": "DMIMistralCompareForCausalLM",

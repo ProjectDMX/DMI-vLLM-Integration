@@ -19,6 +19,7 @@ MODEL_CLASSES = {
     "gpt2.py": "GPT2PLMHeadModel",
     "granite.py": "GranitePForCausalLM",
     "jamba.py": "JambaPForCausalLM",
+    "kimi_k3.py": "KimiK3PForConditionalGeneration",
     "lfm2.py": "Lfm2PForCausalLM",
     "llama.py": "LlamaPForCausalLM",
     "minicpm.py": "MiniCPMPForCausalLM",
@@ -28,6 +29,9 @@ MODEL_CLASSES = {
     "qwen2.py": "Qwen2PForCausalLM",
     "qwen2_moe.py": "Qwen2MoePForCausalLM",
     "qwen3.py": "Qwen3PForCausalLM",
+}
+UPSTREAM_SOURCE_PATHS = {
+    "kimi_k3.py": "vllm/models/kimi_k3/nvidia/model.py",
 }
 ORACLE_COPY_PROVENANCE = {
     "gpt2_compare.py": (
@@ -63,10 +67,12 @@ def test_model_port_has_provenance_and_external_import_boundaries(
     tree = ast.parse(source)
 
     assert source.startswith("# SPDX-License-Identifier: Apache-2.0")
-    upstream_name = filename.removesuffix(".py")
+    upstream_path = UPSTREAM_SOURCE_PATHS.get(
+        filename,
+        f"vllm/model_executor/models/{filename}",
+    )
     assert (
-        f"Adapted from vllm/model_executor/models/{upstream_name}.py"
-        in source
+        f"Adapted from {upstream_path}" in source
     )
     assert model_class in {
         node.name for node in tree.body if isinstance(node, ast.ClassDef)

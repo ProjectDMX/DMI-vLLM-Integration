@@ -27,6 +27,9 @@ MODEL_REGISTRATIONS: Mapping[str, str] = {
     "DMIJambaForCausalLM": (
         "dmi_vllm_integration.models.jamba:JambaPForCausalLM"
     ),
+    "DMIKimiK3ForConditionalGeneration": (
+        "dmi_vllm_integration.models.kimi_k3:KimiK3PForConditionalGeneration"
+    ),
     "DMILfm2ForCausalLM": (
         "dmi_vllm_integration.models.lfm2:Lfm2PForCausalLM"
     ),

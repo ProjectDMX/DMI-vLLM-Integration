@@ -28,6 +28,9 @@ _ORACLE_MODELS = {
     "DMIJambaCompareForCausalLM": (
         "tests.oracles.jamba_compare:JambaCompareForCausalLM"
     ),
+    "DMIKimiK3CompareForConditionalGeneration": (
+        "tests.oracles.kimi_k3_compare:KimiK3CompareForConditionalGeneration"
+    ),
     "DMILfm2CompareForCausalLM": (
         "tests.oracles.lfm2_compare:Lfm2CompareForCausalLM"
     ),
