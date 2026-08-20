@@ -79,23 +79,23 @@ adding only Llama-like aliases.
 | 11 | `openbmb/MiniCPM4.1-8B` | 48,765 | `MiniCPMForCausalLM` | `minicpm:MiniCPMForCausalLM` | dense, remote-code/version constraints |
 
 Current expansion status: Gemma 3 is `experimental` for the TP1 V1 offline
-eager/default-graph cells at historical source commit `b71a55ae4227`. The
-[`Gemma 3 audit`](vllm-0.27.1-gemma3-audit.md) records strict public parity,
+eager/default-graph cells at historical source commit `b71a55ae4227`.
+Validation records strict public parity,
 complete hook storage, and byte-identical eager/graph transport on a six-layer
 tiny fixture. The official `google/gemma-3-1b-it` checkpoint was gated for the
 available account, so the real-checkpoint completion gate remains open and the
 row is not yet `supported`.
 
 Phi-3 is `supported` for the bounded TP1 BF16 V1 offline eager/default-graph
-cell at historical source commit `b4965771d8a4`. The
-[`Phi-3 audit`](vllm-0.27.1-phi3-audit.md) records strict public tests on the
+cell at historical source commit `b4965771d8a4`. Validation includes strict
+public tests on the
 official `microsoft/Phi-3.5-mini-instruct` checkpoint plus byte-identical
 eager/graph full-hook transport on a tiny fixture. TP>1, PP, quantization,
 serving, speculative, and non-text task variants remain excluded.
 
 Mistral is `supported` for the bounded TP1 BF16 V1 offline eager/default-graph
-cell at historical source commit `8c89ec33bbc5`. The
-[`Mistral audit`](vllm-0.27.1-mistral-audit.md) records strict public parity on
+cell at historical source commit `8c89ec33bbc5`. Validation records strict
+public parity on
 the official `mistralai/Mistral-7B-Instruct-v0.2` checkpoint and byte-identical
 eager/graph full-hook transport on a qualified small fixture. Configurations
 that enable Llama-4 attention scaling or adaptive conditional RMS normalization,
@@ -103,16 +103,16 @@ alternate loaders, TP>1, quantization, serving, speculative, and non-text
 variants remain excluded.
 
 Falcon-H1 is `supported` for the bounded TP1 BF16 V1 offline
-eager/default-graph cell at historical source commit `e69be3978552`. The
-[`Falcon-H1 audit`](vllm-0.27.1-falcon-h1-audit.md) records public validation on
+eager/default-graph cell at historical source commit `e69be3978552`. Validation
+includes public checks on
 the official 0.5B checkpoint, byte-identical eager/graph full-hook transport on
 the official Tiny checkpoint, and the bounded SSM branch capability manifest.
 Internal Mamba state, TP>1, prefix caching, quantization, serving, speculative,
 and non-text variants remain excluded.
 
 LFM2 is `supported` for the bounded TP1 BF16 V1 offline eager/default-graph
-cell at historical source commit `229014dd9692`. The
-[`LFM2 audit`](vllm-0.27.1-lfm2-audit.md) records strict public parity on the
+cell at historical source commit `229014dd9692`. Validation records strict
+public parity on the
 official `LiquidAI/LFM2.5-1.2B-Instruct` checkpoint and byte-identical
 eager/graph full-hook transport on a qualified two-layer hybrid fixture. The
 manifest distinguishes ten production convolution layers from six attention
@@ -121,8 +121,7 @@ quantization, serving, and speculative modes remain excluded.
 
 Jamba is `supported` only for the dense official `ai21labs/AI21-Jamba2-3B`
 configuration in the bounded TP1 BF16 V1 offline eager/default-graph cell at
-integration commit `b4556982f63d`. The
-[`Jamba audit`](vllm-0.27.1-jamba-audit.md) records public API parity and
+integration commit `b4556982f63d`. Validation records public API parity and
 byte-identical eager/graph storage on the same production checkpoint. Its
 truthful 263-family manifest distinguishes 26 Mamba1 layers from attention
 layers 7 and 21. The loader fails closed if any layer has more than one expert;
@@ -131,8 +130,8 @@ caching, quantization, serving, and speculative modes remain excluded.
 
 Granite is `supported` for the official
 `ibm-granite/granite-4.1-3b` checkpoint in the bounded TP1 BF16 V1 offline
-eager/default-graph cell at historical source commit `dca631b19ec7`. The
-[`Granite audit`](vllm-0.27.1-granite-audit.md) records public API parity and
+eager/default-graph cell at historical source commit `dca631b19ec7`. Validation
+records public API parity and
 byte-identical eager/graph storage on that same production checkpoint. Its
 485-family manifest preserves Granite's attention, embedding, residual, and
 logits scaling and adds the exact post-activation MLP boundary. Granite 4.1 8B
@@ -142,8 +141,7 @@ serving, and speculative modes remain excluded.
 
 OLMo 3 is `supported` for the official `allenai/Olmo-3-7B-Instruct`
 checkpoint in the bounded TP1 BF16 V1 offline eager/default-graph cell at
-integration commit `9f6a5c762bc5`. The
-[`OLMo 3 audit`](vllm-0.27.1-olmo3-audit.md) records public API parity and
+integration commit `9f6a5c762bc5`. Validation records public API parity and
 byte-identical eager/graph storage on that same production checkpoint. Its
 389-family manifest follows OLMo 3's post-norm residual order and observes Q/K
 after Q/K normalization but before the layer-type-specific RoPE. Available tiny
@@ -154,8 +152,8 @@ speculative, and other OLMo-family architectures remain excluded.
 
 Apertus is `supported` for the official
 `swiss-ai/Apertus-8B-Instruct-2509` checkpoint in the bounded TP1 BF16 V1
-offline eager/default-graph cell at historical source commit `3d5e5fb6b87f`. The
-[`Apertus audit`](vllm-0.27.1-apertus-audit.md) records strict public API parity
+offline eager/default-graph cell at historical source commit `3d5e5fb6b87f`.
+Validation records strict public API parity
 and byte-identical eager/graph storage on that same production checkpoint. Its
 389-family manifest follows fused pre-norm residual arithmetic, observes Q/K
 after per-head normalization and before RoPE, and exposes the xIELU
@@ -166,8 +164,8 @@ excluded.
 
 ERNIE 4.5 dense is `supported` for the official
 `baidu/ERNIE-4.5-0.3B-PT` checkpoint in the bounded TP1 BF16 V1 offline
-eager/default-graph cell at historical source commit `6f2cf03f68e4`. The
-[`ERNIE 4.5 audit`](vllm-0.27.1-ernie45-audit.md) records strict public API
+eager/default-graph cell at historical source commit `6f2cf03f68e4`. Validation
+records strict public API
 parity and byte-identical eager/graph storage on that same production
 checkpoint. Its 203-family manifest follows the inherited dense Llama block,
 while the monitored and compare variants explicitly replay ERNIE's non-NeoX
@@ -177,8 +175,8 @@ quantization, serving, and speculative modes remain excluded.
 
 MiniCPM 4.1 dense is `supported` for the official
 `openbmb/MiniCPM4.1-8B` checkpoint in the bounded TP1 BF16 V1 offline
-eager/default-graph cell at historical source commit `db9e7cfccc0b`. The
-[`MiniCPM 4.1 audit`](vllm-0.27.1-minicpm4-audit.md) records strict public API
+eager/default-graph cell at historical source commit `db9e7cfccc0b`. Validation
+records strict public API
 parity and byte-identical eager/graph storage on that same production
 checkpoint. Its 389-family manifest preserves scaled embeddings, both
 depth-scaled residual branches, LongRoPE placement, and final width scaling.
