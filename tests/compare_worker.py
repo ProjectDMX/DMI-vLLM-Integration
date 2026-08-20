@@ -32,6 +32,7 @@ _ARCH_REMAP = {
     "Phi3ForCausalLM": "DMIPhi3CompareForCausalLM",
     "Qwen2MoeForCausalLM": "DMIQwen2MoeCompareForCausalLM",
     "Qwen3ForCausalLM": "DMIQwen3CompareForCausalLM",
+    "Qwen3_5ForConditionalGeneration": "DMIQwen3_5CompareForConditionalGeneration",
     **{
         architecture: "DMILlamaCompareForCausalLM"
         for architecture in LLAMA_COMPAT_ARCHITECTURES

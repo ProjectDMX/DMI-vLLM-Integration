@@ -28,6 +28,7 @@ MODEL_CLASSES = {
     "qwen2.py": "Qwen2PForCausalLM",
     "qwen2_moe.py": "Qwen2MoePForCausalLM",
     "qwen3.py": "Qwen3PForCausalLM",
+    "qwen3_5.py": "Qwen3_5PForConditionalGeneration",
 }
 ORACLE_COPY_PROVENANCE = {
     "gpt2_compare.py": (

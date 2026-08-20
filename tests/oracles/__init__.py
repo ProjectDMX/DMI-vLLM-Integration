@@ -54,6 +54,9 @@ _ORACLE_MODELS = {
     "DMIQwen3CompareForCausalLM": (
         "tests.oracles.qwen3_compare:Qwen3CompareForCausalLM"
     ),
+    "DMIQwen3_5CompareForConditionalGeneration": (
+        "tests.oracles.qwen3_5_compare:Qwen3_5CompareForConditionalGeneration"
+    ),
     "DMIQwen3RefForCausalLM": "tests.oracles.qwen3_ref:Qwen3RefForCausalLM",
 }
 
