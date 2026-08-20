@@ -1,0 +1,13 @@
+DMI-vLLM-Integration
+Copyright 2026 ProjectDMX contributors
+
+This product includes model integration code adapted from vLLM 0.27.1,
+Copyright contributors to the vLLM project, licensed under the Apache License
+2.0. The corresponding upstream base is:
+
+    https://github.com/vllm-project/vllm
+    6e448d0ea9bf3d88d898b65449ca6dc2aec170ac
+
+Adapted source files retain their upstream SPDX copyright and license notices
+and identify their original vLLM source paths. The official vLLM package is a
+runtime dependency; this distribution does not bundle the vLLM source tree.

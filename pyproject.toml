@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=77.0.3,<81.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "DMI-vLLM-Integration"
+version = "0.27.1"
+description = "DMI integration for official vLLM 0.27.1"
+readme = "README.md"
+requires-python = ">=3.10,<3.15"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{name = "ProjectDMX"}]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "DMI>=1.1.0,<2.0",
+    "packaging>=24.2",
+    "vllm==0.27.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/ProjectDMX/DMI-vLLM-Integration"
+Repository = "https://github.com/ProjectDMX/DMI-vLLM-Integration"
+
+[project.entry-points."vllm.general_plugins"]
+dmi_models = "dmi_vllm_integration.plugin:register"
+
+[project.entry-points."vllm.endpoint_plugins"]
+dmi_stop_monitoring = "dmi_vllm_integration.endpoint:DMIStopMonitoringEndpointPlugin"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["dmi_vllm_integration*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

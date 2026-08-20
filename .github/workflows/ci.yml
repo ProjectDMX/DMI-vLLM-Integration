@@ -1,0 +1,76 @@
+name: CPU and package gates
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "release/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Build distribution
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Build and validate wheel and sdist
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build twine
+          python -m build
+          python -m twine check dist/*
+          python -m pip install --no-deps dist/*.whl
+          python -c 'from importlib.metadata import distribution; d = distribution("DMI-vLLM-Integration"); eps = {(e.group, e.name) for e in d.entry_points}; assert d.version == "0.27.1"; assert ("vllm.general_plugins", "dmi_models") in eps; assert ("vllm.endpoint_plugins", "dmi_stop_monitoring") in eps'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distributions
+          path: dist/*
+          if-no-files-found: error
+
+  cpu:
+    name: Official vLLM 0.27.1 portable CPU gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      VLLM_USE_V2_MODEL_RUNNER: "0"
+    steps:
+      - uses: actions/checkout@v4
+      # Pre-release pin. Replace this source checkout with DMI==1.1.0 after
+      # that release is published.
+      - uses: actions/checkout@v4
+        with:
+          repository: ProjectDMX/DMI
+          ref: 13a964319fcda70e45e3d61098d15fd8d628c410
+          path: .ci/dmi
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install the pinned DMI API, official vLLM, and this checkout
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install 'vllm==0.27.1' pytest
+          python -m pip install --no-deps --editable .ci/dmi
+          python -m pip install --no-deps --editable .
+      - name: Confirm the official runtime boundary
+        run: |
+          python -c 'from importlib.metadata import version; import pathlib, vllm; assert version("vllm") == "0.27.1"; assert "dmi_vllm_integration" not in pathlib.Path(vllm.__file__).parts'
+          python -c 'from pathlib import Path; source = Path(".ci/dmi/monitoring/integration_api/v1/__init__.py").read_text(); assert "DMI_INTEGRATION_API_VERSION = 1" in source'
+      - name: Run portable CPU integration tests
+        run: |
+          python -m compileall -q src tests
+          python -m pytest -q -m "not gpu" tests/test_architectures.py tests/test_compat_endpoint.py tests/test_models_source_contract.py tests/test_official_vllm_contract.py tests/test_patch_fused_moe_router.py tests/test_plugin_models.py

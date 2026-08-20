@@ -1,0 +1,96 @@
+name: Manual GPU release gate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dmi-vllm-gpu-release
+  cancel-in-progress: false
+
+jobs:
+  release-gate:
+    name: Official vLLM 0.27.1 on self-hosted GPUs
+    # This workflow is intentionally manual. The custom `gpu` label must
+    # identify a release runner with two CUDA GPUs, cached test checkpoints,
+    # the DMI native runtime, and ClickHouse on localhost:9000.
+    runs-on: [self-hosted, linux, x64, gpu]
+    timeout-minutes: 720
+    env:
+      HF_HUB_OFFLINE: "1"
+      VLLM_USE_V2_MODEL_RUNNER: "0"
+      VLLM_PLUGINS: dmi_models,dmi_stop_monitoring
+      DMX_DB_HOST: localhost
+      DMX_DB_PORT: "9000"
+    steps:
+      - uses: actions/checkout@v4
+      # Pre-release pin. Replace this source checkout with DMI==1.1.0 after
+      # that release is published.
+      - uses: actions/checkout@v4
+        with:
+          repository: ProjectDMX/DMI
+          ref: 13a964319fcda70e45e3d61098d15fd8d628c410
+          path: .ci/dmi
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install official vLLM and build the pinned DMI API commit
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install 'vllm==0.27.1' clickhouse-driver pytest
+          git -C .ci/dmi submodule update --init --depth 1 libs/clickhouse-cpp
+          cmake -S .ci/dmi/libs/clickhouse-cpp -B .ci/dmi/libs/clickhouse-cpp/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+          cmake --build .ci/dmi/libs/clickhouse-cpp/build -j2
+          make -C .ci/dmi/monitoring -j2
+          python -m pip install --no-deps --editable .ci/dmi
+          python -m pip install --no-deps --editable .
+      - name: Verify release-runner prerequisites
+        run: |
+          python -c 'from importlib.metadata import version; import torch; assert version("vllm") == "0.27.1"; assert torch.cuda.is_available(); assert torch.cuda.device_count() >= 2'
+          python -c 'from monitoring.integration_api.v1 import DMI_INTEGRATION_API_VERSION; assert DMI_INTEGRATION_API_VERSION == 1'
+          clickhouse-client --host localhost --port 9000 --query 'SELECT 1'
+          python -m pytest -q -m gpu tests/test_official_vllm_contract.py
+      - name: Run CPU gate first
+        run: >-
+          python -m pytest -q
+          -m "not gpu and not clickhouse and not e2e and not slow"
+      - name: Validate offline request order and capture by topology
+        run: |
+          run_root="$RUNNER_TEMP/dmi-vllm-release-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$run_root"
+          CUDA_VISIBLE_DEVICES=0 python -m tests.vllm_request_order_fix_gpu --tp 1 --pp 1 --model gpt2 --evidence-dir "$run_root/offline-gpt2-tp1-pp1"
+          CUDA_VISIBLE_DEVICES=0,1 python -m tests.vllm_request_order_fix_gpu --tp 2 --pp 1 --model gpt2 --evidence-dir "$run_root/offline-gpt2-tp2-pp1"
+          CUDA_VISIBLE_DEVICES=0,1 python -m tests.vllm_request_order_fix_gpu --tp 1 --pp 2 --model gpt2 --evidence-dir "$run_root/offline-gpt2-tp1-pp2"
+          CUDA_VISIBLE_DEVICES=0 python -m tests.vllm_request_order_fix_gpu --tp 1 --pp 1 --model Qwen/Qwen3-0.6B --evidence-dir "$run_root/offline-qwen3-tp1-pp1"
+          CUDA_VISIBLE_DEVICES=0,1 python -m tests.vllm_request_order_fix_gpu --tp 2 --pp 1 --model Qwen/Qwen3-0.6B --evidence-dir "$run_root/offline-qwen3-tp2-pp1"
+          CUDA_VISIBLE_DEVICES=0,1 python -m tests.vllm_request_order_fix_gpu --tp 1 --pp 2 --model Qwen/Qwen3-0.6B --evidence-dir "$run_root/offline-qwen3-tp1-pp2"
+      - name: Validate persistent AOT compile-cache loading
+        run: |
+          run_root="$RUNNER_TEMP/dmi-vllm-release-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          CUDA_VISIBLE_DEVICES=0 python -m tests.vllm_compile_cache --artifact-dir "$run_root/compile-cache"
+      - name: Validate online storage and finalization by topology
+        run: |
+          run_root="$RUNNER_TEMP/dmi-vllm-release-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          CUDA_VISIBLE_DEVICES=0 python -m tests.vllm_online_storage --tp 1 --pp 1 --artifact-dir "$run_root/online-qwen3-tp1-pp1"
+          CUDA_VISIBLE_DEVICES=0,1 python -m tests.vllm_online_storage --tp 2 --pp 1 --artifact-dir "$run_root/online-qwen3-tp2-pp1"
+          CUDA_VISIBLE_DEVICES=0,1 python -m tests.vllm_online_storage --tp 1 --pp 2 --artifact-dir "$run_root/online-qwen3-tp1-pp2"
+      - name: Validate DMILLM and Qwen2-MoE routing
+        run: |
+          run_root="$RUNNER_TEMP/dmi-vllm-release-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          CUDA_VISIBLE_DEVICES=0 python -m tests.vllm_dmillm_runner --result-file "$run_root/dmillm.json"
+          env -u VLLM_TARGET_DEVICE CUDA_VISIBLE_DEVICES=0,1 E2E_ARTIFACT_DIR="$run_root/qwen2-moe" bash tests/tools/run_qwen2_moe_vllm_pipeline.sh
+      - name: Upload compact release evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpu-release-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/dmi-vllm-release-${{ github.run_id }}-${{ github.run_attempt }}/**/*.json
+            ${{ runner.temp }}/dmi-vllm-release-${{ github.run_id }}-${{ github.run_attempt }}/**/*.jsonl
+            ${{ runner.temp }}/dmi-vllm-release-${{ github.run_id }}-${{ github.run_attempt }}/**/*.log
+          if-no-files-found: warn
+          retention-days: 14
