@@ -54,6 +54,9 @@ MODEL_REGISTRATIONS: Mapping[str, str] = {
     "DMIQwen3ForCausalLM": (
         "dmi_vllm_integration.models.qwen3:Qwen3PForCausalLM"
     ),
+    "DMIQwen3MoeForCausalLM": (
+        "dmi_vllm_integration.models.qwen3_moe:Qwen3MoePForCausalLM"
+    ),
 }
 
 

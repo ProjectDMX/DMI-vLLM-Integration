@@ -36,6 +36,7 @@ ARCHITECTURE_REMAP: dict[str, str] = {
     "Qwen2ForCausalLM": "DMIQwen2ForCausalLM",
     "Qwen2MoeForCausalLM": "DMIQwen2MoeForCausalLM",
     "Qwen3ForCausalLM": "DMIQwen3ForCausalLM",
+    "Qwen3MoeForCausalLM": "DMIQwen3MoeForCausalLM",
     **{
         architecture: "DMILlamaForCausalLM"
         for architecture in LLAMA_COMPAT_ARCHITECTURES
