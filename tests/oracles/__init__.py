@@ -20,6 +20,9 @@ _ORACLE_MODELS = {
     "DMIGemma3CompareForCausalLM": (
         "tests.oracles.gemma3_compare:Gemma3CompareForCausalLM"
     ),
+    "DMIGlmMoeDsaCompareForCausalLM": (
+        "tests.oracles.glm_moe_dsa_compare:GlmMoeDsaCompareForCausalLM"
+    ),
     "DMIGPT2CompareLMHeadModel": "tests.oracles.gpt2_compare:GPT2CompareForCausalLM",
     "DMIGPT2RefLMHeadModel": "tests.oracles.gpt2_ref:GPT2RefLMHeadModel",
     "DMIGraniteCompareForCausalLM": (

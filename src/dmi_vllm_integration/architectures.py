@@ -25,6 +25,7 @@ ARCHITECTURE_REMAP: dict[str, str] = {
     "Ernie4_5ForCausalLM": "DMIErnie4_5ForCausalLM",
     "FalconH1ForCausalLM": "DMIFalconH1ForCausalLM",
     "Gemma3ForCausalLM": "DMIGemma3ForCausalLM",
+    "GlmMoeDsaForCausalLM": "DMIGlmMoeDsaForCausalLM",
     "GPT2LMHeadModel": "DMIGPT2LMHeadModel",
     "GraniteForCausalLM": "DMIGraniteForCausalLM",
     "JambaForCausalLM": "DMIJambaForCausalLM",

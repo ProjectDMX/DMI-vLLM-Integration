@@ -18,6 +18,9 @@ MODEL_REGISTRATIONS: Mapping[str, str] = {
     "DMIGemma3ForCausalLM": (
         "dmi_vllm_integration.models.gemma3:Gemma3PForCausalLM"
     ),
+    "DMIGlmMoeDsaForCausalLM": (
+        "dmi_vllm_integration.models.glm_moe_dsa:GlmMoeDsaPForCausalLM"
+    ),
     "DMIGPT2LMHeadModel": (
         "dmi_vllm_integration.models.gpt2:GPT2PLMHeadModel"
     ),

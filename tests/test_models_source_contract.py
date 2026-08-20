@@ -16,6 +16,7 @@ MODEL_CLASSES = {
     "ernie45.py": "Ernie4_5PForCausalLM",
     "falcon_h1.py": "FalconH1PForCausalLM",
     "gemma3.py": "Gemma3PForCausalLM",
+    "glm_moe_dsa.py": "GlmMoeDsaPForCausalLM",
     "gpt2.py": "GPT2PLMHeadModel",
     "granite.py": "GranitePForCausalLM",
     "jamba.py": "JambaPForCausalLM",
@@ -28,6 +29,9 @@ MODEL_CLASSES = {
     "qwen2.py": "Qwen2PForCausalLM",
     "qwen2_moe.py": "Qwen2MoePForCausalLM",
     "qwen3.py": "Qwen3PForCausalLM",
+}
+UPSTREAM_SOURCE_FILES = {
+    "glm_moe_dsa.py": "deepseek_v2.py",
 }
 ORACLE_COPY_PROVENANCE = {
     "gpt2_compare.py": (
@@ -63,9 +67,9 @@ def test_model_port_has_provenance_and_external_import_boundaries(
     tree = ast.parse(source)
 
     assert source.startswith("# SPDX-License-Identifier: Apache-2.0")
-    upstream_name = filename.removesuffix(".py")
+    upstream_name = UPSTREAM_SOURCE_FILES.get(filename, filename)
     assert (
-        f"Adapted from vllm/model_executor/models/{upstream_name}.py"
+        f"Adapted from vllm/model_executor/models/{upstream_name}"
         in source
     )
     assert model_class in {
