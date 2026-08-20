@@ -19,6 +19,7 @@ from tests.oracles import register_oracle_models
 
 _ARCH_REMAP = {
     "ApertusForCausalLM": "DMIApertusCompareForCausalLM",
+    "DeepseekV4ForCausalLM": "DMIDeepseekV4CompareForCausalLM",
     "Ernie4_5ForCausalLM": "DMIErnie4_5CompareForCausalLM",
     "FalconH1ForCausalLM": "DMIFalconH1CompareForCausalLM",
     "Gemma3ForCausalLM": "DMIGemma3CompareForCausalLM",

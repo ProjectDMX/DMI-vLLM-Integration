@@ -22,6 +22,7 @@ LLAMA_COMPAT_ARCHITECTURES = frozenset(
 
 ARCHITECTURE_REMAP: dict[str, str] = {
     "ApertusForCausalLM": "DMIApertusForCausalLM",
+    "DeepseekV4ForCausalLM": "DMIDeepseekV4ForCausalLM",
     "Ernie4_5ForCausalLM": "DMIErnie4_5ForCausalLM",
     "FalconH1ForCausalLM": "DMIFalconH1ForCausalLM",
     "Gemma3ForCausalLM": "DMIGemma3ForCausalLM",

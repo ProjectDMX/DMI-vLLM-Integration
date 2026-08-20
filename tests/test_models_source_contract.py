@@ -13,6 +13,7 @@ MODEL_DIRECTORY = (
 )
 MODEL_CLASSES = {
     "apertus.py": "ApertusPForCausalLM",
+    "deepseek_v4.py": "DeepseekV4PForCausalLM",
     "ernie45.py": "Ernie4_5PForCausalLM",
     "falcon_h1.py": "FalconH1PForCausalLM",
     "gemma3.py": "Gemma3PForCausalLM",
@@ -28,6 +29,9 @@ MODEL_CLASSES = {
     "qwen2.py": "Qwen2PForCausalLM",
     "qwen2_moe.py": "Qwen2MoePForCausalLM",
     "qwen3.py": "Qwen3PForCausalLM",
+}
+UPSTREAM_SOURCE_PATHS = {
+    "deepseek_v4.py": "vllm/models/deepseek_v4/nvidia/model.py",
 }
 ORACLE_COPY_PROVENANCE = {
     "gpt2_compare.py": (
@@ -63,10 +67,12 @@ def test_model_port_has_provenance_and_external_import_boundaries(
     tree = ast.parse(source)
 
     assert source.startswith("# SPDX-License-Identifier: Apache-2.0")
-    upstream_name = filename.removesuffix(".py")
+    upstream_path = UPSTREAM_SOURCE_PATHS.get(
+        filename,
+        f"vllm/model_executor/models/{filename}",
+    )
     assert (
-        f"Adapted from vllm/model_executor/models/{upstream_name}.py"
-        in source
+        f"Adapted from {upstream_path}" in source
     )
     assert model_class in {
         node.name for node in tree.body if isinstance(node, ast.ClassDef)

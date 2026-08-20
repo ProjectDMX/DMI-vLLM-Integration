@@ -9,6 +9,9 @@ MODEL_REGISTRATIONS: Mapping[str, str] = {
     "DMIApertusForCausalLM": (
         "dmi_vllm_integration.models.apertus:ApertusPForCausalLM"
     ),
+    "DMIDeepseekV4ForCausalLM": (
+        "dmi_vllm_integration.models.deepseek_v4:DeepseekV4PForCausalLM"
+    ),
     "DMIErnie4_5ForCausalLM": (
         "dmi_vllm_integration.models.ernie45:Ernie4_5PForCausalLM"
     ),

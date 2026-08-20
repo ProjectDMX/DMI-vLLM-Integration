@@ -11,6 +11,9 @@ _ORACLE_MODELS = {
     "DMIApertusCompareForCausalLM": (
         "tests.oracles.apertus_compare:ApertusCompareForCausalLM"
     ),
+    "DMIDeepseekV4CompareForCausalLM": (
+        "tests.oracles.deepseek_v4_compare:DeepseekV4CompareForCausalLM"
+    ),
     "DMIErnie4_5CompareForCausalLM": (
         "tests.oracles.ernie45_compare:Ernie4_5CompareForCausalLM"
     ),

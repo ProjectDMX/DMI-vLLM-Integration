@@ -18,6 +18,7 @@ import torch
 
 _MODEL_ALIASES = {
     "gpt2": "gpt2",
+    "deepseek_v4_flash": "deepseek-ai/DeepSeek-V4-Flash",
     "qwen2_moe": "Qwen/Qwen1.5-MoE-A2.7B",
     "qwen3": "Qwen/Qwen3-0.6B",
     "llama": "meta-llama/Llama-3.1-8B",
