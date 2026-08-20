@@ -22,6 +22,9 @@ _ORACLE_MODELS = {
     ),
     "DMIGPT2CompareLMHeadModel": "tests.oracles.gpt2_compare:GPT2CompareForCausalLM",
     "DMIGPT2RefLMHeadModel": "tests.oracles.gpt2_ref:GPT2RefLMHeadModel",
+    "DMIGptOssCompareForCausalLM": (
+        "tests.oracles.gpt_oss_compare:GptOssCompareForCausalLM"
+    ),
     "DMIGraniteCompareForCausalLM": (
         "tests.oracles.granite_compare:GraniteCompareForCausalLM"
     ),

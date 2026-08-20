@@ -23,6 +23,7 @@ _ARCH_REMAP = {
     "FalconH1ForCausalLM": "DMIFalconH1CompareForCausalLM",
     "Gemma3ForCausalLM": "DMIGemma3CompareForCausalLM",
     "GPT2LMHeadModel": "DMIGPT2CompareLMHeadModel",
+    "GptOssForCausalLM": "DMIGptOssCompareForCausalLM",
     "GraniteForCausalLM": "DMIGraniteCompareForCausalLM",
     "JambaForCausalLM": "DMIJambaCompareForCausalLM",
     "Lfm2ForCausalLM": "DMILfm2CompareForCausalLM",

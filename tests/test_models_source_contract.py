@@ -17,6 +17,7 @@ MODEL_CLASSES = {
     "falcon_h1.py": "FalconH1PForCausalLM",
     "gemma3.py": "Gemma3PForCausalLM",
     "gpt2.py": "GPT2PLMHeadModel",
+    "gpt_oss.py": "GptOssPForCausalLM",
     "granite.py": "GranitePForCausalLM",
     "jamba.py": "JambaPForCausalLM",
     "lfm2.py": "Lfm2PForCausalLM",

@@ -21,6 +21,9 @@ MODEL_REGISTRATIONS: Mapping[str, str] = {
     "DMIGPT2LMHeadModel": (
         "dmi_vllm_integration.models.gpt2:GPT2PLMHeadModel"
     ),
+    "DMIGptOssForCausalLM": (
+        "dmi_vllm_integration.models.gpt_oss:GptOssPForCausalLM"
+    ),
     "DMIGraniteForCausalLM": (
         "dmi_vllm_integration.models.granite:GranitePForCausalLM"
     ),
