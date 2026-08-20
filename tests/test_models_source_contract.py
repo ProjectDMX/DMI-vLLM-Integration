@@ -12,8 +12,19 @@ MODEL_DIRECTORY = (
     Path(__file__).parents[1] / "src" / "dmi_vllm_integration" / "models"
 )
 MODEL_CLASSES = {
+    "apertus.py": "ApertusPForCausalLM",
+    "ernie45.py": "Ernie4_5PForCausalLM",
+    "falcon_h1.py": "FalconH1PForCausalLM",
+    "gemma3.py": "Gemma3PForCausalLM",
     "gpt2.py": "GPT2PLMHeadModel",
+    "granite.py": "GranitePForCausalLM",
+    "jamba.py": "JambaPForCausalLM",
+    "lfm2.py": "Lfm2PForCausalLM",
     "llama.py": "LlamaPForCausalLM",
+    "minicpm.py": "MiniCPMPForCausalLM",
+    "mistral.py": "MistralPForCausalLM",
+    "olmo3.py": "Olmo3PForCausalLM",
+    "phi3.py": "Phi3PForCausalLM",
     "qwen2.py": "Qwen2PForCausalLM",
     "qwen2_moe.py": "Qwen2MoePForCausalLM",
     "qwen3.py": "Qwen3PForCausalLM",
@@ -68,7 +79,9 @@ def test_model_port_has_provenance_and_external_import_boundaries(
         for node in imports
         if node.module is not None and node.module.startswith("monitoring")
     }
-    assert dmi_imports == {"monitoring.integration_api.v1"}
+    assert dmi_imports <= {"monitoring.integration_api.v1"}
+    if "HookPoint" in source or "HookSpec" in source:
+        assert dmi_imports == {"monitoring.integration_api.v1"}
 
     vllm_imports = {
         node.module

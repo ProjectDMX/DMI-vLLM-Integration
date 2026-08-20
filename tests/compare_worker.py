@@ -13,14 +13,29 @@ from typing import Any
 import torch
 
 from dmi_vllm_integration.worker import DMXGPUWorker
+from dmi_vllm_integration.architectures import LLAMA_COMPAT_ARCHITECTURES
 from tests.oracles import register_oracle_models
 
 
 _ARCH_REMAP = {
+    "ApertusForCausalLM": "DMIApertusCompareForCausalLM",
+    "Ernie4_5ForCausalLM": "DMIErnie4_5CompareForCausalLM",
+    "FalconH1ForCausalLM": "DMIFalconH1CompareForCausalLM",
+    "Gemma3ForCausalLM": "DMIGemma3CompareForCausalLM",
     "GPT2LMHeadModel": "DMIGPT2CompareLMHeadModel",
+    "GraniteForCausalLM": "DMIGraniteCompareForCausalLM",
+    "JambaForCausalLM": "DMIJambaCompareForCausalLM",
+    "Lfm2ForCausalLM": "DMILfm2CompareForCausalLM",
+    "MiniCPMForCausalLM": "DMIMiniCPMCompareForCausalLM",
+    "MistralForCausalLM": "DMIMistralCompareForCausalLM",
+    "Olmo3ForCausalLM": "DMIOlmo3CompareForCausalLM",
+    "Phi3ForCausalLM": "DMIPhi3CompareForCausalLM",
     "Qwen2MoeForCausalLM": "DMIQwen2MoeCompareForCausalLM",
     "Qwen3ForCausalLM": "DMIQwen3CompareForCausalLM",
-    "LlamaForCausalLM": "DMILlamaCompareForCausalLM",
+    **{
+        architecture: "DMILlamaCompareForCausalLM"
+        for architecture in LLAMA_COMPAT_ARCHITECTURES
+    },
 }
 
 # Hook names that are TP-sharded

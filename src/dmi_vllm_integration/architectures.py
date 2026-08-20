@@ -5,12 +5,41 @@ from __future__ import annotations
 from typing import Any
 
 
+LLAMA_COMPAT_ARCHITECTURES = frozenset(
+    {
+        "AquilaModel",
+        "AquilaForCausalLM",
+        "CwmForCausalLM",
+        "InternLMForCausalLM",
+        "InternLM3ForCausalLM",
+        "IQuestCoderForCausalLM",
+        "LlamaForCausalLM",
+        "LLaMAForCausalLM",
+        "XverseForCausalLM",
+    }
+)
+
+
 ARCHITECTURE_REMAP: dict[str, str] = {
+    "ApertusForCausalLM": "DMIApertusForCausalLM",
+    "Ernie4_5ForCausalLM": "DMIErnie4_5ForCausalLM",
+    "FalconH1ForCausalLM": "DMIFalconH1ForCausalLM",
+    "Gemma3ForCausalLM": "DMIGemma3ForCausalLM",
     "GPT2LMHeadModel": "DMIGPT2LMHeadModel",
+    "GraniteForCausalLM": "DMIGraniteForCausalLM",
+    "JambaForCausalLM": "DMIJambaForCausalLM",
+    "Lfm2ForCausalLM": "DMILfm2ForCausalLM",
+    "MiniCPMForCausalLM": "DMIMiniCPMForCausalLM",
+    "MistralForCausalLM": "DMIMistralForCausalLM",
+    "Olmo3ForCausalLM": "DMIOlmo3ForCausalLM",
+    "Phi3ForCausalLM": "DMIPhi3ForCausalLM",
     "Qwen2ForCausalLM": "DMIQwen2ForCausalLM",
     "Qwen2MoeForCausalLM": "DMIQwen2MoeForCausalLM",
     "Qwen3ForCausalLM": "DMIQwen3ForCausalLM",
-    "LlamaForCausalLM": "DMILlamaForCausalLM",
+    **{
+        architecture: "DMILlamaForCausalLM"
+        for architecture in LLAMA_COMPAT_ARCHITECTURES
+    },
 }
 SUPPORTED_CONFIG_ARCHITECTURES = frozenset(
     (*ARCHITECTURE_REMAP, *ARCHITECTURE_REMAP.values())
@@ -45,6 +74,7 @@ def require_supported_architecture(model_config: Any) -> tuple[str, ...]:
 
 
 __all__ = [
+    "LLAMA_COMPAT_ARCHITECTURES",
     "ARCHITECTURE_REMAP",
     "SUPPORTED_CONFIG_ARCHITECTURES",
     "require_supported_architecture",

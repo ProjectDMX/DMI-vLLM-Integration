@@ -10,11 +10,44 @@ from dmi_vllm_integration import plugin
 
 
 EXPECTED_REGISTRATIONS = {
+    "DMIApertusForCausalLM": (
+        "dmi_vllm_integration.models.apertus:ApertusPForCausalLM"
+    ),
+    "DMIErnie4_5ForCausalLM": (
+        "dmi_vllm_integration.models.ernie45:Ernie4_5PForCausalLM"
+    ),
+    "DMIFalconH1ForCausalLM": (
+        "dmi_vllm_integration.models.falcon_h1:FalconH1PForCausalLM"
+    ),
+    "DMIGemma3ForCausalLM": (
+        "dmi_vllm_integration.models.gemma3:Gemma3PForCausalLM"
+    ),
     "DMIGPT2LMHeadModel": (
         "dmi_vllm_integration.models.gpt2:GPT2PLMHeadModel"
     ),
+    "DMIGraniteForCausalLM": (
+        "dmi_vllm_integration.models.granite:GranitePForCausalLM"
+    ),
+    "DMIJambaForCausalLM": (
+        "dmi_vllm_integration.models.jamba:JambaPForCausalLM"
+    ),
+    "DMILfm2ForCausalLM": (
+        "dmi_vllm_integration.models.lfm2:Lfm2PForCausalLM"
+    ),
     "DMILlamaForCausalLM": (
         "dmi_vllm_integration.models.llama:LlamaPForCausalLM"
+    ),
+    "DMIMiniCPMForCausalLM": (
+        "dmi_vllm_integration.models.minicpm:MiniCPMPForCausalLM"
+    ),
+    "DMIMistralForCausalLM": (
+        "dmi_vllm_integration.models.mistral:MistralPForCausalLM"
+    ),
+    "DMIOlmo3ForCausalLM": (
+        "dmi_vllm_integration.models.olmo3:Olmo3PForCausalLM"
+    ),
+    "DMIPhi3ForCausalLM": (
+        "dmi_vllm_integration.models.phi3:Phi3PForCausalLM"
     ),
     "DMIQwen2ForCausalLM": (
         "dmi_vllm_integration.models.qwen2:Qwen2PForCausalLM"

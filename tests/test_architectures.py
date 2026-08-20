@@ -35,7 +35,7 @@ def test_supported_aliases_are_exactly_the_plugin_registrations() -> None:
 
 @pytest.mark.parametrize(
     "architectures",
-    [None, [], "LlamaForCausalLM", [None], ["MistralForCausalLM"]],
+    [None, [], "LlamaForCausalLM", [None], ["MambaForCausalLM"]],
 )
 def test_missing_malformed_or_unsupported_architecture_is_rejected(
     architectures,

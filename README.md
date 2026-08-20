@@ -11,7 +11,11 @@ pip install 'DMI-vLLM-Integration==0.27.1'
 export VLLM_USE_V2_MODEL_RUNNER=0
 ```
 
-Supported architectures are GPT-2, Llama, Qwen2, Qwen2-MoE, and Qwen3.
+Supported architectures are Apertus, ERNIE 4.5 dense, Falcon-H1, Gemma 3
+text, GPT-2, Granite dense, Jamba dense, LFM2, Llama, MiniCPM, Mistral,
+OLMo 3, Phi-3, Qwen2, Qwen2-MoE, and Qwen3. The exact bounded support cells
+and exclusions are recorded in the
+[model coverage roadmap](docs/vllm-model-coverage-roadmap.md).
 An unsupported architecture is rejected before CUDA initialization. When
 top-k routing capture is selected for Qwen2-MoE, the loaded routing backend is
 validated after model load and before inference; it must expose the modular

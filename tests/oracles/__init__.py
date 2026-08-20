@@ -8,10 +8,43 @@ from __future__ import annotations
 
 
 _ORACLE_MODELS = {
+    "DMIApertusCompareForCausalLM": (
+        "tests.oracles.apertus_compare:ApertusCompareForCausalLM"
+    ),
+    "DMIErnie4_5CompareForCausalLM": (
+        "tests.oracles.ernie45_compare:Ernie4_5CompareForCausalLM"
+    ),
+    "DMIFalconH1CompareForCausalLM": (
+        "tests.oracles.falcon_h1_compare:FalconH1CompareForCausalLM"
+    ),
+    "DMIGemma3CompareForCausalLM": (
+        "tests.oracles.gemma3_compare:Gemma3CompareForCausalLM"
+    ),
     "DMIGPT2CompareLMHeadModel": "tests.oracles.gpt2_compare:GPT2CompareForCausalLM",
     "DMIGPT2RefLMHeadModel": "tests.oracles.gpt2_ref:GPT2RefLMHeadModel",
+    "DMIGraniteCompareForCausalLM": (
+        "tests.oracles.granite_compare:GraniteCompareForCausalLM"
+    ),
+    "DMIJambaCompareForCausalLM": (
+        "tests.oracles.jamba_compare:JambaCompareForCausalLM"
+    ),
+    "DMILfm2CompareForCausalLM": (
+        "tests.oracles.lfm2_compare:Lfm2CompareForCausalLM"
+    ),
     "DMILlamaCompareForCausalLM": "tests.oracles.llama_compare:LlamaCompareForCausalLM",
     "DMILlamaRefForCausalLM": "tests.oracles.llama_ref:LlamaRefForCausalLM",
+    "DMIMiniCPMCompareForCausalLM": (
+        "tests.oracles.minicpm_compare:MiniCPMCompareForCausalLM"
+    ),
+    "DMIMistralCompareForCausalLM": (
+        "tests.oracles.mistral_compare:MistralCompareForCausalLM"
+    ),
+    "DMIOlmo3CompareForCausalLM": (
+        "tests.oracles.olmo3_compare:Olmo3CompareForCausalLM"
+    ),
+    "DMIPhi3CompareForCausalLM": (
+        "tests.oracles.phi3_compare:Phi3CompareForCausalLM"
+    ),
     "DMIQwen2MoeCompareForCausalLM": (
         "tests.oracles.qwen2_moe_compare:Qwen2MoeCompareForCausalLM"
     ),
