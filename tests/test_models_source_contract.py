@@ -16,6 +16,7 @@ MODEL_CLASSES = {
     "ernie45.py": "Ernie4_5PForCausalLM",
     "falcon_h1.py": "FalconH1PForCausalLM",
     "gemma3.py": "Gemma3PForCausalLM",
+    "gemma4.py": "Gemma4PForConditionalGeneration",
     "gpt2.py": "GPT2PLMHeadModel",
     "granite.py": "GranitePForCausalLM",
     "jamba.py": "JambaPForCausalLM",

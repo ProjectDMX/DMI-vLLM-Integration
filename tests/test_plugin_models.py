@@ -22,6 +22,9 @@ EXPECTED_REGISTRATIONS = {
     "DMIGemma3ForCausalLM": (
         "dmi_vllm_integration.models.gemma3:Gemma3PForCausalLM"
     ),
+    "DMIGemma4ForConditionalGeneration": (
+        "dmi_vllm_integration.models.gemma4:Gemma4PForConditionalGeneration"
+    ),
     "DMIGPT2LMHeadModel": (
         "dmi_vllm_integration.models.gpt2:GPT2PLMHeadModel"
     ),
