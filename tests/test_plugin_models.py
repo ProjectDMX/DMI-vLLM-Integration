@@ -40,6 +40,9 @@ EXPECTED_REGISTRATIONS = {
     "DMIMiniCPMForCausalLM": (
         "dmi_vllm_integration.models.minicpm:MiniCPMPForCausalLM"
     ),
+    "DMIMiniMaxM2ForCausalLM": (
+        "dmi_vllm_integration.models.minimax_m2:MiniMaxM2PForCausalLM"
+    ),
     "DMIMistralForCausalLM": (
         "dmi_vllm_integration.models.mistral:MistralPForCausalLM"
     ),

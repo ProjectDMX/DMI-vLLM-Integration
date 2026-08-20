@@ -36,6 +36,9 @@ _ORACLE_MODELS = {
     "DMIMiniCPMCompareForCausalLM": (
         "tests.oracles.minicpm_compare:MiniCPMCompareForCausalLM"
     ),
+    "DMIMiniMaxM2CompareForCausalLM": (
+        "tests.oracles.minimax_m2_compare:MiniMaxM2CompareForCausalLM"
+    ),
     "DMIMistralCompareForCausalLM": (
         "tests.oracles.mistral_compare:MistralCompareForCausalLM"
     ),

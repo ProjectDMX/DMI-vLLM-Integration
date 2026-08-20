@@ -27,6 +27,7 @@ _ARCH_REMAP = {
     "JambaForCausalLM": "DMIJambaCompareForCausalLM",
     "Lfm2ForCausalLM": "DMILfm2CompareForCausalLM",
     "MiniCPMForCausalLM": "DMIMiniCPMCompareForCausalLM",
+    "MiniMaxM2ForCausalLM": "DMIMiniMaxM2CompareForCausalLM",
     "MistralForCausalLM": "DMIMistralCompareForCausalLM",
     "Olmo3ForCausalLM": "DMIOlmo3CompareForCausalLM",
     "Phi3ForCausalLM": "DMIPhi3CompareForCausalLM",

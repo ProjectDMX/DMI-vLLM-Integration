@@ -22,6 +22,7 @@ MODEL_CLASSES = {
     "lfm2.py": "Lfm2PForCausalLM",
     "llama.py": "LlamaPForCausalLM",
     "minicpm.py": "MiniCPMPForCausalLM",
+    "minimax_m2.py": "MiniMaxM2PForCausalLM",
     "mistral.py": "MistralPForCausalLM",
     "olmo3.py": "Olmo3PForCausalLM",
     "phi3.py": "Phi3PForCausalLM",
