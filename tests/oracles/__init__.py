@@ -33,6 +33,9 @@ _ORACLE_MODELS = {
     ),
     "DMILlamaCompareForCausalLM": "tests.oracles.llama_compare:LlamaCompareForCausalLM",
     "DMILlamaRefForCausalLM": "tests.oracles.llama_ref:LlamaRefForCausalLM",
+    "DMILlama4CompareForConditionalGeneration": (
+        "tests.oracles.mllama4_compare:Llama4CompareForConditionalGeneration"
+    ),
     "DMIMiniCPMCompareForCausalLM": (
         "tests.oracles.minicpm_compare:MiniCPMCompareForCausalLM"
     ),

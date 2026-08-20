@@ -23,6 +23,7 @@ import torch
 
 _MODEL_ALIASES = {
     "gpt2": "gpt2",
+    "llama4_scout": "meta-llama/Llama-4-Scout-17B-16E-Instruct",
     "qwen2_moe": "Qwen/Qwen1.5-MoE-A2.7B",
     "qwen3": "Qwen/Qwen3-0.6B",
     "llama": "meta-llama/Llama-3.1-8B",

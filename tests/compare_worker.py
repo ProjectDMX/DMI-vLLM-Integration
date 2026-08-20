@@ -26,6 +26,7 @@ _ARCH_REMAP = {
     "GraniteForCausalLM": "DMIGraniteCompareForCausalLM",
     "JambaForCausalLM": "DMIJambaCompareForCausalLM",
     "Lfm2ForCausalLM": "DMILfm2CompareForCausalLM",
+    "Llama4ForConditionalGeneration": "DMILlama4CompareForConditionalGeneration",
     "MiniCPMForCausalLM": "DMIMiniCPMCompareForCausalLM",
     "MistralForCausalLM": "DMIMistralCompareForCausalLM",
     "Olmo3ForCausalLM": "DMIOlmo3CompareForCausalLM",

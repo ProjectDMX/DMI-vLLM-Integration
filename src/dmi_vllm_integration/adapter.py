@@ -202,6 +202,7 @@ class _VLLMHookSelection:
         final_logits_dtype: Optional[torch.dtype] = None,
     ) -> "_VLLMHookSelection":
         """Select local and model-wide rank-type hooks once at attachment."""
+        hf_config = getattr(hf_config, "text_config", hf_config)
         tp_size = int(parallel_config.tensor_parallel_size)
         pp_size = int(parallel_config.pipeline_parallel_size)
         if tp_size < 1 or pp_size < 1:

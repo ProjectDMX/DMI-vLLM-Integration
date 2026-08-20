@@ -30,6 +30,9 @@ MODEL_REGISTRATIONS: Mapping[str, str] = {
     "DMILfm2ForCausalLM": (
         "dmi_vllm_integration.models.lfm2:Lfm2PForCausalLM"
     ),
+    "DMILlama4ForConditionalGeneration": (
+        "dmi_vllm_integration.models.mllama4:Llama4PForConditionalGeneration"
+    ),
     "DMILlamaForCausalLM": (
         "dmi_vllm_integration.models.llama:LlamaPForCausalLM"
     ),

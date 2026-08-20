@@ -29,6 +29,7 @@ ARCHITECTURE_REMAP: dict[str, str] = {
     "GraniteForCausalLM": "DMIGraniteForCausalLM",
     "JambaForCausalLM": "DMIJambaForCausalLM",
     "Lfm2ForCausalLM": "DMILfm2ForCausalLM",
+    "Llama4ForConditionalGeneration": "DMILlama4ForConditionalGeneration",
     "MiniCPMForCausalLM": "DMIMiniCPMForCausalLM",
     "MistralForCausalLM": "DMIMistralForCausalLM",
     "Olmo3ForCausalLM": "DMIOlmo3ForCausalLM",
