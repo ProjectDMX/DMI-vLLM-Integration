@@ -45,15 +45,15 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
+      DMI_VLLM_TEST_NATIVE_STUB: "1"
+      NUMBA_DISABLE_JIT: "1"
       VLLM_USE_V2_MODEL_RUNNER: "0"
     steps:
       - uses: actions/checkout@v4
-      # Pre-release pin. Replace this source checkout with DMI==1.1.0 after
-      # that release is published.
       - uses: actions/checkout@v4
         with:
           repository: ProjectDMX/DMI
-          ref: 13a964319fcda70e45e3d61098d15fd8d628c410
+          ref: v1.1.0
           path: .ci/dmi
           submodules: false
       - uses: actions/setup-python@v5
@@ -68,9 +68,9 @@ jobs:
           python -m pip install --no-deps --editable .
       - name: Confirm the official runtime boundary
         run: |
-          python -c 'from importlib.metadata import version; import pathlib, vllm; assert version("vllm") == "0.27.1"; assert "dmi_vllm_integration" not in pathlib.Path(vllm.__file__).parts'
+          python -c 'from importlib.metadata import version; import pathlib, vllm; assert version("DMI") == "1.1.0"; assert version("vllm") == "0.27.1"; assert "dmi_vllm_integration" not in pathlib.Path(vllm.__file__).parts'
           python -c 'from pathlib import Path; source = Path(".ci/dmi/monitoring/integration_api/v1/__init__.py").read_text(); assert "DMI_INTEGRATION_API_VERSION = 1" in source'
       - name: Run portable CPU integration tests
         run: |
           python -m compileall -q src tests
-          python -m pytest -q -m "not gpu" tests/test_architectures.py tests/test_compat_endpoint.py tests/test_models_source_contract.py tests/test_official_vllm_contract.py tests/test_patch_fused_moe_router.py tests/test_plugin_models.py
+          python -m pytest -q -m "not gpu and not clickhouse and not e2e and not slow"

@@ -26,12 +26,10 @@ jobs:
       DMX_DB_PORT: "9000"
     steps:
       - uses: actions/checkout@v4
-      # Pre-release pin. Replace this source checkout with DMI==1.1.0 after
-      # that release is published.
       - uses: actions/checkout@v4
         with:
           repository: ProjectDMX/DMI
-          ref: 13a964319fcda70e45e3d61098d15fd8d628c410
+          ref: v1.1.0
           path: .ci/dmi
           submodules: false
       - uses: actions/setup-python@v5

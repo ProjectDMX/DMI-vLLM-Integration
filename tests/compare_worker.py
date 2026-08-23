@@ -13,14 +13,35 @@ from typing import Any
 import torch
 
 from dmi_vllm_integration.worker import DMXGPUWorker
+from dmi_vllm_integration.architectures import LLAMA_COMPAT_ARCHITECTURES
 from tests.oracles import register_oracle_models
 
 
 _ARCH_REMAP = {
+    "ApertusForCausalLM": "DMIApertusCompareForCausalLM",
+    "DeepseekV4ForCausalLM": "DMIDeepseekV4CompareForCausalLM",
+    "Ernie4_5ForCausalLM": "DMIErnie4_5CompareForCausalLM",
+    "Gemma3ForCausalLM": "DMIGemma3CompareForCausalLM",
+    "GlmMoeDsaForCausalLM": "DMIGlmMoeDsaCompareForCausalLM",
+    "Gemma4ForConditionalGeneration": "DMIGemma4CompareForConditionalGeneration",
     "GPT2LMHeadModel": "DMIGPT2CompareLMHeadModel",
+    "GptOssForCausalLM": "DMIGptOssCompareForCausalLM",
+    "GraniteForCausalLM": "DMIGraniteCompareForCausalLM",
+    "KimiK3ForConditionalGeneration": "DMIKimiK3CompareForConditionalGeneration",
+    "Llama4ForConditionalGeneration": "DMILlama4CompareForConditionalGeneration",
+    "MiniCPMForCausalLM": "DMIMiniCPMCompareForCausalLM",
+    "MiniMaxM2ForCausalLM": "DMIMiniMaxM2CompareForCausalLM",
+    "MistralForCausalLM": "DMIMistralCompareForCausalLM",
+    "Olmo3ForCausalLM": "DMIOlmo3CompareForCausalLM",
+    "Phi3ForCausalLM": "DMIPhi3CompareForCausalLM",
     "Qwen2MoeForCausalLM": "DMIQwen2MoeCompareForCausalLM",
     "Qwen3ForCausalLM": "DMIQwen3CompareForCausalLM",
-    "LlamaForCausalLM": "DMILlamaCompareForCausalLM",
+    "Qwen3MoeForCausalLM": "DMIQwen3MoeCompareForCausalLM",
+    "Qwen3_5ForConditionalGeneration": "DMIQwen3_5CompareForConditionalGeneration",
+    **{
+        architecture: "DMILlamaCompareForCausalLM"
+        for architecture in LLAMA_COMPAT_ARCHITECTURES
+    },
 }
 
 # Hook names that are TP-sharded

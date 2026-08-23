@@ -40,6 +40,7 @@ import torch
 
 from vllm import LLM
 from vllm.distributed.ec_transfer import get_ec_transfer, has_ec_transfer
+from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.v1.worker.gpu_worker import Worker
 
 from .architectures import (
@@ -47,6 +48,8 @@ from .architectures import (
     require_supported_architecture,
 )
 from .compat import require_compatible_runtime
+from .model_shape import make_model_shape_from_hf_config
+from .model_validation import validate_model_specific_config
 
 from monitoring.integration_api.v1 import (
     ALL_HOOK_TYPES,
@@ -56,6 +59,8 @@ from monitoring.integration_api.v1 import (
     ClickHouseClientConfig,
     DMXHostEngine,
     HOOK_TYPE_FINAL_LOGITS,
+    HOOK_TYPE_ROUTER_LOGITS,
+    HOOK_TYPE_TOKEN_IDS,
     HOOK_TYPE_TOPK_IDS,
     HOOK_TYPE_TOPK_WEIGHTS,
     HookRowBasis,
@@ -73,7 +78,6 @@ from monitoring.integration_api.v1 import (
     hook_belongs_to_tp_rank,
     is_preset_registered,
     make_lazy_internal,
-    make_model_shape_from_hf_config,
     register_preset,
     select_hook_specs,
 )
@@ -121,6 +125,69 @@ def _cfg(ac: dict, key: str, env_key: str, default: Any) -> Any:
             return int(env_val)
         return env_val
     return default
+
+
+def _resolve_hook_types(selection: str) -> frozenset[int]:
+    """Resolve one public hook-selection expression to hook-type IDs."""
+    return frozenset(
+        spec.hook_type
+        for spec in select_hook_specs(
+            [HookSpec(hook_type, None) for hook_type in ALL_HOOK_TYPES],
+            selection,
+        )
+    )
+
+
+def _resolve_hook_selection_tokens(
+    selection: str,
+) -> tuple[frozenset[int], tuple[tuple[str, frozenset[int]], ...]]:
+    """Resolve a selection while preserving comma-token provenance."""
+    selected = _resolve_hook_types(selection)
+    tokens = tuple(
+        token.strip() for token in selection.split(",") if token.strip()
+    )
+    return selected, tuple((token, _resolve_hook_types(token)) for token in tokens)
+
+
+def _token_ids_unavailability_reason(model_config: Any) -> Optional[str]:
+    """Explain why vLLM V1 will not pass ``input_ids`` to this model."""
+    if bool(getattr(model_config, "enable_prompt_embeds", False)):
+        return (
+            "prompt embeddings are enabled, so vLLM passes inputs_embeds "
+            "instead of input_ids"
+        )
+
+    # Mirror GPUModelRunner._preprocess. Multimodal-capable models whose
+    # modality limits are all disabled take vLLM's text-only branch and still
+    # receive IDs, so ModelConfig.is_multimodal_model alone is insufficient.
+    supports_mm_inputs = (
+        bool(getattr(model_config, "is_multimodal_model", False))
+        and MULTIMODAL_REGISTRY.supports_multimodal_inputs(model_config)
+    )
+    if (
+        supports_mm_inputs
+        and not bool(getattr(model_config, "is_encoder_decoder", False))
+        and not bool(getattr(model_config, "requires_raw_input_tokens", False))
+    ):
+        return (
+            "vLLM's active multimodal input path passes inputs_embeds without "
+            "input_ids because the model does not require raw input tokens"
+        )
+    return None
+
+
+def _effective_selection_preset(hook_types: frozenset[int]) -> str:
+    """Return a deterministic internal preset for an effective hook set."""
+    encoded_types = "_".join(str(hook_type) for hook_type in sorted(hook_types))
+    name = f"__dmi_vllm_effective_without_token_ids_{encoded_types}"
+    if not is_preset_registered(name):
+        register_preset(name, hook_types)
+    elif _resolve_hook_types(name) != hook_types:
+        raise RuntimeError(
+            "DMI vLLM's reserved effective hook-selection preset was "
+            f"registered with conflicting hook types: {name!r}"
+        )
+    return name
 
 
 _VLLM_REQ_ID_SUFFIX = re.compile(r"-[0-9a-f]{8}$")
@@ -188,6 +255,7 @@ class _VLLMStepState:
 class _VLLMHookSelection:
     local_hooks: Tuple[HookSpec, ...]
     candidate_rank_hook_sets: Tuple[Tuple[HookSpec, ...], ...]
+    selected_hook_types: frozenset[int]
 
     @classmethod
     def from_model(
@@ -202,6 +270,7 @@ class _VLLMHookSelection:
         final_logits_dtype: Optional[torch.dtype] = None,
     ) -> "_VLLMHookSelection":
         """Select local and model-wide rank-type hooks once at attachment."""
+        hf_config = getattr(hf_config, "text_config", hf_config)
         tp_size = int(parallel_config.tensor_parallel_size)
         pp_size = int(parallel_config.pipeline_parallel_size)
         if tp_size < 1 or pp_size < 1:
@@ -303,6 +372,9 @@ class _VLLMHookSelection:
         return cls(
             local_hooks=local_hooks,
             candidate_rank_hook_sets=tuple(candidate_rank_hook_sets),
+            selected_hook_types=frozenset(
+                spec.hook_type for spec in selected_model_wide
+            ),
         )
 
 
@@ -648,8 +720,6 @@ class VLLMAdaptor(BackendAdaptor):
                 self._strip_eligible_hps.append(hp)
 
         active_specs = self.active_hook_specs
-        if not self.user_wants_null_mode:
-            self._validate_moe_routing_capture(model, active_specs)
         cfg = self.model_shape
         if cfg is None:
             raise RuntimeError("DMI vLLM role formulas require an attached ring")
@@ -662,18 +732,75 @@ class VLLMAdaptor(BackendAdaptor):
             hf_config=self.vllm_config.model_config.hf_config,
             final_logits_dtype=head_dtype,
         )
+        if not self.user_wants_null_mode:
+            self._validate_moe_routing_capture(
+                model,
+                active_specs,
+                self.vllm_config.parallel_config,
+                selected_hook_types=selection.selected_hook_types,
+            )
         self._compile_role_formulas(selection)
 
     @staticmethod
     def _validate_moe_routing_capture(
         model: Any,
         specs: Tuple[HookSpec, ...],
+        parallel_config: Any = None,
+        *,
+        selected_hook_types: Optional[frozenset[int]] = None,
     ) -> None:
-        """Reject top-k capture when the selected MoE kernel hides routing."""
-        if not any(
+        """Reject selected routing hooks on incompatible MoE execution paths."""
+        if selected_hook_types is None:
+            selected_hook_types = frozenset(spec.hook_type for spec in specs)
+        selected_captures_topk = any(
+            hook_type in (HOOK_TYPE_TOPK_IDS, HOOK_TYPE_TOPK_WEIGHTS)
+            for hook_type in selected_hook_types
+        )
+        selected_captures_topk_ids = any(
+            hook_type == HOOK_TYPE_TOPK_IDS for hook_type in selected_hook_types
+        )
+        selected_captures_router_logits = any(
+            hook_type == HOOK_TYPE_ROUTER_LOGITS for hook_type in selected_hook_types
+        )
+        sp_unsupported_hook_types = frozenset(
+            getattr(model, "dmi_sequence_parallel_unsupported_hook_types", ())
+        )
+        if (
+            parallel_config is not None
+            and getattr(parallel_config, "use_sequence_parallel_moe", False)
+            and selected_hook_types & sp_unsupported_hook_types
+        ):
+            raise RuntimeError(
+                "DMI selected hooks require a model forward that does not "
+                "support sequence-parallel MoE"
+            )
+        if (
+            parallel_config is not None
+            and getattr(parallel_config, "use_sequence_parallel_moe", False)
+            and (selected_captures_topk or selected_captures_router_logits)
+        ):
+            raise RuntimeError(
+                "DMI routing-hook capture does not support sequence-parallel "
+                "MoE token shards"
+            )
+        if (
+            selected_captures_topk_ids
+            and parallel_config is not None
+            and getattr(parallel_config, "enable_eplb", False)
+        ):
+            raise RuntimeError(
+                "DMI top-k ID capture requires logical expert IDs and does "
+                "not support EPLB physical expert remapping"
+            )
+
+        captures_topk = any(
             spec.hook_type in (HOOK_TYPE_TOPK_IDS, HOOK_TYPE_TOPK_WEIGHTS)
             for spec in specs
-        ):
+        )
+        captures_router_logits = any(
+            spec.hook_type == HOOK_TYPE_ROUTER_LOGITS for spec in specs
+        )
+        if not captures_topk and not captures_router_logits:
             return
 
         from vllm.model_executor.layers.fused_moe.layer import MoERunner
@@ -686,12 +813,20 @@ class VLLMAdaptor(BackendAdaptor):
             raise RuntimeError(
                 "DMI selected top-k routing hooks but found no local MoE runner"
             )
-        if any(runner.is_monolithic for runner in moe_runners):
+        if captures_topk and any(runner.is_monolithic for runner in moe_runners):
             raise RuntimeError(
                 "DMI top-k routing capture requires a modular MoE backend; "
                 "select one with --moe-backend (for example, triton)."
             )
-        if any(
+        if captures_router_logits and any(
+            runner.is_monolithic and runner.is_internal_router
+            for runner in moe_runners
+        ):
+            raise RuntimeError(
+                "DMI router-logit capture requires a modular MoE backend "
+                "when vLLM owns the model's router"
+            )
+        if captures_topk and any(
             runner.do_naive_dispatch_combine
             or (
                 runner.moe_config.pcp_size > 1
@@ -758,9 +893,6 @@ class VLLMAdaptor(BackendAdaptor):
             or self._capture_sizes[-1] > self._max_capture_size
         ):
             raise RuntimeError("Invalid vLLM CUDA-graph capture sizes")
-
-        if self.vllm_config.speculative_config is not None:
-            raise RuntimeError("DMI vLLM does not support speculative decoding")
 
         tp_role_count = min(tp_size, 2)
 
@@ -1258,6 +1390,7 @@ class DMXGPUWorker(Worker):
         super().__init__(*args, **kwargs)
         self.adaptor: Optional[VLLMAdaptor] = None
         self._dmx_host_engine: Any = None
+        self._dmx_requested_hook_selection: str = "vllm-full"
         self._dmx_hook_selection: str = "vllm-full"
         self._dmx_stopped = False
 
@@ -1273,13 +1406,34 @@ class DMXGPUWorker(Worker):
         config = self.vllm_config
         model = config.model_config
         parallel = config.parallel_config
+        additional_config = getattr(config, "additional_config", None)
+        if not isinstance(additional_config, dict):
+            additional_config = {}
+        hook_selection = _cfg(
+            additional_config,
+            "dmx_hook_selection",
+            "DMX_HOOK_SELECTION",
+            "vllm-full",
+        )
+        try:
+            selected_hook_types, resolved_selection_tokens = (
+                _resolve_hook_selection_tokens(hook_selection)
+            )
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"DMI vLLM received an invalid hook selection: {hook_selection!r}"
+            ) from exc
+        self._dmx_requested_hook_selection = hook_selection
+        effective_hook_selection = hook_selection
+        selection_warning = None
         model_impl = getattr(model, "model_impl", "auto")
         if model_impl not in {"auto", "vllm"}:
             raise RuntimeError(
                 "DMI vLLM supports only the auto or vllm model "
                 "implementation"
             )
-        require_supported_architecture(model)
+        architectures = require_supported_architecture(model)
+        validate_model_specific_config(config, architectures)
         if model.runner_type != "generate":
             raise RuntimeError("DMI vLLM supports only the V1 generate runner")
         if int(parallel.data_parallel_size) > 1:
@@ -1288,20 +1442,53 @@ class DMXGPUWorker(Worker):
             raise RuntimeError(
                 "DMI vLLM does not support prefill context parallelism"
             )
-        if int(getattr(parallel, "decode_context_parallel_size", 1)) > 1:
-            raise RuntimeError(
-                "DMI vLLM does not support decode context parallelism"
-            )
         if parallel.use_ubatching:
             raise RuntimeError("DMI vLLM does not support DBO/ubatching")
         if getattr(parallel, "enable_elastic_ep", False):
             raise RuntimeError(
                 "DMI vLLM does not support elastic expert parallelism"
             )
-        if model.enable_prompt_embeds:
-            raise RuntimeError("DMI vLLM does not support prompt embeddings")
-        if config.speculative_config is not None:
-            raise RuntimeError("DMI vLLM does not support speculative decoding")
+        if HOOK_TYPE_TOKEN_IDS in selected_hook_types:
+            unavailable_reason = _token_ids_unavailability_reason(model)
+            if unavailable_reason is not None:
+                explicit_token_selectors = tuple(
+                    token
+                    for token, hook_types in resolved_selection_tokens
+                    if hook_types == frozenset({HOOK_TYPE_TOKEN_IDS})
+                )
+                if explicit_token_selectors:
+                    selectors = ", ".join(
+                        repr(token) for token in explicit_token_selectors
+                    )
+                    raise RuntimeError(
+                        "DMI token-ID capture was explicitly selected by "
+                        f"{selectors}, but input_ids cannot reach the model: "
+                        f"{unavailable_reason}. Select hooks without token_ids."
+                    )
+                selected_hook_types = frozenset(
+                    hook_type
+                    for hook_type in selected_hook_types
+                    if hook_type != HOOK_TYPE_TOKEN_IDS
+                )
+                effective_hook_selection = _effective_selection_preset(
+                    selected_hook_types
+                )
+                selection_warning = (
+                    "[vllm_integration] Removed token_ids from indirect hook "
+                    f"selection {hook_selection!r}: {unavailable_reason}. "
+                    f"Effective selection is {effective_hook_selection!r} "
+                    "(the requested hook set minus token_ids)."
+                )
+        if (
+            config.speculative_config is not None
+            and HOOK_TYPE_FINAL_LOGITS in selected_hook_types
+        ):
+            raise RuntimeError(
+                "DMI final-logit capture does not support speculative decoding"
+            )
+        self._dmx_hook_selection = effective_hook_selection
+        if selection_warning is not None:
+            warnings.warn(selection_warning, UserWarning, stacklevel=2)
 
     def init_device(self) -> None:
         self._validate_dmi_config()
@@ -1311,9 +1498,6 @@ class DMXGPUWorker(Worker):
         if not isinstance(ac, dict):
             ac = {}
 
-        self._dmx_hook_selection = _cfg(
-            ac, "dmx_hook_selection", "DMX_HOOK_SELECTION", "vllm-full"
-        )
         model_id = _cfg(ac, "dmx_model_id", "DMX_MODEL_ID", "")
         ring_payload_mb = _cfg(ac, "dmx_ring_payload_mb", "DMX_RING_PAYLOAD_MB", 4096)
         ring_pinned_mb = _cfg(ac, "dmx_ring_pinned_mb", "DMX_RING_PINNED_MB", 4096)

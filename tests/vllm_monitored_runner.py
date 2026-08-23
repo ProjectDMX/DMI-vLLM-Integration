@@ -18,6 +18,15 @@ import torch
 
 _MODEL_ALIASES = {
     "gpt2": "gpt2",
+    "gpt_oss": "openai/gpt-oss-20b",
+    "qwen3_moe": "Qwen/Qwen3-30B-A3B",
+    "qwen36": "Qwen/Qwen3.6-27B",
+    "deepseek_v4_flash": "deepseek-ai/DeepSeek-V4-Flash",
+    "minimax_m27": "MiniMaxAI/MiniMax-M2.7",
+    "kimi_k3": "moonshotai/Kimi-K3",
+    "glm52": "zai-org/GLM-5.2",
+    "gemma4_e2b": "google/gemma-4-E2B-it",
+    "llama4_scout": "meta-llama/Llama-4-Scout-17B-16E-Instruct",
     "qwen2_moe": "Qwen/Qwen1.5-MoE-A2.7B",
     "qwen3": "Qwen/Qwen3-0.6B",
     "llama": "meta-llama/Llama-3.1-8B",
