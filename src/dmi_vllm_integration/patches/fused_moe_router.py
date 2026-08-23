@@ -1,8 +1,9 @@
 """Observe the one routing result consumed by modular vLLM MoE experts.
 
-Official vLLM 0.27.1 has no public routing-observer hook.  The monitored
-Qwen2-MoE model needs the selected weights and IDs without calling routing a
-second time, so this module wraps that release's ``select_experts`` boundary.
+Official vLLM 0.27.1 has no public routing-observer hook. Monitored MoE models
+need the exact router logits, selected weights, and selected IDs without
+calling routing a second time, so this module wraps that release's
+``select_experts`` boundary.
 The patch is process-idempotent and is activated only when the monitored MoE
 model module is imported.
 """
@@ -19,11 +20,14 @@ import torch
 
 
 SUPPORTED_VLLM_VERSIONS = frozenset({"0.27.1"})
-_PATCH_VERSION = 1
+_PATCH_VERSION = 2
 _CLASS_PATCH_MARKER = "_dmi_routing_observer_patch_version"
 _OBSERVER_ATTRIBUTE = "_dmi_routing_observer"
 
-RoutingObserver = Callable[[torch.Tensor, torch.Tensor], None]
+RoutingObserver = Callable[
+    [torch.Tensor, torch.Tensor, torch.Tensor],
+    None,
+]
 
 
 def _installed_vllm_version() -> str:
@@ -99,7 +103,7 @@ def apply_fused_moe_router_observer_patch() -> bool:
         )
         observer = getattr(self, _OBSERVER_ATTRIBUTE, None)
         if observer is not None:
-            observer(topk_weights, topk_ids)
+            observer(router_logits, topk_weights, topk_ids)
         return topk_weights, topk_ids
 
     router_class.set_routing_observer = set_routing_observer

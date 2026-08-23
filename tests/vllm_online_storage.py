@@ -3,8 +3,8 @@
 This is a manually invoked GPU/ClickHouse integration gate.  It serves the
 same prefix-cache workload through ``Qwen3RefForCausalLM`` (D2D buffers saved
 to disk) and ``DMXGPUWorker`` (ring offload to ClickHouse), then requires exact
-stable HTTP-field parity (excluding ``created``) and bitwise equality for every
-captured tensor.
+stable HTTP-field parity (excluding ``created`` and ``system_fingerprint``)
+and bitwise equality for every captured tensor.
 
 Example::
 
@@ -239,6 +239,7 @@ def _run_workload(port: int) -> dict[str, dict[str, Any]]:
 def _stable_response(response: dict[str, Any]) -> dict[str, Any]:
     stable = dict(response)
     stable.pop("created", None)
+    stable.pop("system_fingerprint", None)
     return stable
 
 

@@ -49,17 +49,21 @@ def test_patch_observes_the_single_returned_route_and_is_idempotent(
     assert fused_moe_router.apply_fused_moe_router_observer_patch() is False
 
     router = FakeRouter()
-    observed: list[tuple[object, object]] = []
-    router.set_routing_observer(lambda weights, ids: observed.append((weights, ids)))
-    returned = router.select_experts(object(), object())
+    observed: list[tuple[object, object, object]] = []
+    hidden_states = object()
+    router_logits = object()
+    router.set_routing_observer(
+        lambda logits, weights, ids: observed.append((logits, weights, ids))
+    )
+    returned = router.select_experts(hidden_states, router_logits)
 
     assert router.calls == 1
-    assert observed == [returned]
+    assert observed == [(router_logits, *returned)]
 
     router.set_routing_observer(None)
     second = router.select_experts(object(), object())
     assert router.calls == 2
-    assert observed == [returned]
+    assert observed == [(router_logits, *returned)]
     assert second != returned
 
 

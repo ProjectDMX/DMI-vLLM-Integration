@@ -134,9 +134,11 @@ class Qwen2MoeSparseMoeBlock(_Qwen2MoeSparseMoeBlock):
 
     def _observe_routing(
         self,
+        router_logits: torch.Tensor,
         topk_weights: torch.Tensor,
         topk_ids: torch.Tensor,
     ) -> None:
+        del router_logits
         topk_ids = topk_ids.to(torch.int32)
         topk_weights = topk_weights.to(torch.float32)
         self.hook_topk_ids(topk_ids)
@@ -224,7 +226,7 @@ class Qwen2MoeAttention(_Qwen2MoeAttention):
 
 def _is_sparse_moe_layer(config, layer_idx: int) -> bool:
     sparse_step = int(config.decoder_sparse_step)
-    if sparse_step <= 0:
+    if sparse_step == 0:
         raise RuntimeError("Invalid Qwen2MoE decoder_sparse_step")
     mlp_only_layers = getattr(config, "mlp_only_layers", [])
     return (
