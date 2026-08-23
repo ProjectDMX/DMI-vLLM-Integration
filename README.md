@@ -19,19 +19,25 @@ export VLLM_USE_V2_MODEL_RUNNER=0
 The integration package is distributed from this source repository and its
 immutable tags; it is not published to PyPI or another package registry.
 
-## Supported models
+## Model support
 
-The supported model families in this source tree are:
+The following model families are available in this source tree. Experimental
+entries have not completed real-checkpoint GPU qualification:
 
 - Apertus
+- DeepSeek V4 Flash (experimental)
 - ERNIE 4.5 (dense)
 - Gemma 3 (text)
 - Gemma 4 E2B (text)
+- GLM-5.2 (experimental)
 - GPT-2
 - GPT-OSS
 - Granite 4.1
+- Kimi K3 (experimental)
 - Llama
+- Llama 4 (experimental)
 - MiniCPM 4.1 (dense)
+- MiniMax-M2.7 (experimental)
 - Mistral
 - OLMo 3
 - Phi-3.5
