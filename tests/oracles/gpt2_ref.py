@@ -274,6 +274,7 @@ class GPT2RefLMHeadModel(nn.Module, SupportsPP):
         inner_dim = config.n_inner if config.n_inner is not None else 4 * H  # 3072
         vocab_size = config.vocab_size                   # 50257
         dt = vllm_config.model_config.dtype or torch.bfloat16
+        head_dtype = vllm_config.model_config.head_dtype
 
         # TP: per-rank dimensions for sharded hooks
         from vllm.distributed.parallel_state import get_tensor_model_parallel_world_size
@@ -320,7 +321,9 @@ class GPT2RefLMHeadModel(nn.Module, SupportsPP):
             if "z" in enabled:
                 attn._buf_z = _alloc(max_len, n_heads_tp * head_dim)
         if "final_logits" in enabled:
-            self._buf_final_logits = _alloc(max_len, vocab_size, dtype=torch.float32)
+            self._buf_final_logits = _alloc(
+                max_len, vocab_size, dtype=head_dtype
+            )
         if "token_ids" in enabled:
             self._buf_token_ids = _alloc(max_len, dtype=torch.int32)
 

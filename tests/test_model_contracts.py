@@ -79,6 +79,56 @@ def test_gpt2_variants_use_v027_auto_loader_contract(
     assert torch.equal(calls["weights"][0][1], weight.t())  # type: ignore[index]
 
 
+@pytest.mark.parametrize("head_dtype", (torch.float16, torch.float32))
+def test_gpt2_ref_final_logits_buffer_uses_head_dtype(
+    head_dtype: torch.dtype,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    module = importlib.import_module("tests.oracles.gpt2_ref")
+    ref_config = tmp_path / "ref_config.json"
+    ref_config.write_text(
+        '{"enabled_hooks": ["final_logits"], "max_len": 4}'
+    )
+    monkeypatch.setenv("REF_CONFIG", str(ref_config))
+
+    parallel_state = importlib.import_module(
+        "vllm.distributed.parallel_state"
+    )
+    monkeypatch.setattr(
+        parallel_state,
+        "get_tensor_model_parallel_world_size",
+        lambda: 1,
+    )
+    monkeypatch.setattr(
+        module.torch,
+        "empty",
+        lambda *shape, dtype, device: SimpleNamespace(
+            shape=shape, dtype=dtype, device=device
+        ),
+    )
+
+    subject = SimpleNamespace(
+        transformer=SimpleNamespace(start_layer=0, end_layer=0, h=[])
+    )
+    vllm_config = SimpleNamespace(
+        model_config=SimpleNamespace(
+            dtype=torch.float16,
+            head_dtype=head_dtype,
+            hf_config=SimpleNamespace(
+                hidden_size=8,
+                num_attention_heads=2,
+                n_inner=16,
+                vocab_size=32,
+            ),
+        )
+    )
+
+    module.GPT2RefLMHeadModel._init_ref_buffers(subject, vllm_config)
+
+    assert subject._buf_final_logits.dtype is head_dtype
+
+
 def _call_forwards_keyword(function: object, keyword: str) -> bool:
     tree = ast.parse(textwrap.dedent(inspect.getsource(function)))
     return any(
