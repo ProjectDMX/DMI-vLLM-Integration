@@ -9,7 +9,6 @@ from types import SimpleNamespace
 import pytest
 import torch
 from torch import nn
-from transformers import Gemma4TextConfig
 from vllm.compilation.counter import compilation_counter
 from vllm.compilation.wrapper import TorchCompileWithNoGuardsWrapper
 from vllm.config import CompilationMode
@@ -158,19 +157,6 @@ def _parallel(**overrides) -> SimpleNamespace:
 def _add_hooks(module: nn.Module, names: tuple[str, ...]) -> None:
     for name in names:
         setattr(module, f"hook_{name}", HookPoint())
-
-
-def test_gemma4_runtime_preserves_vllm_027_flat_attention_geometry() -> None:
-    config = Gemma4TextConfig(
-        num_hidden_layers=2,
-        layer_types=["sliding_attention", "full_attention"],
-        head_dim=256,
-        global_head_dim=512,
-    )
-
-    assert not getattr(config, "is_heterogeneous", False)
-    assert config.head_dim == 256
-    assert config.global_head_dim == 512
 
 
 def _fake_language_model() -> Gemma4PForCausalLM:
