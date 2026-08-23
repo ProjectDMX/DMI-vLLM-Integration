@@ -23,7 +23,7 @@ from dmi_vllm_integration.adapter import (
     DMXGPUWorker,
     normalize_vllm_request_id,
 )
-from monitoring.integration_api.v1 import (
+from dmi_vllm_integration.dmi_api import (
     HOOK_TYPE_EMBED,
     HOOK_TYPE_FINAL_LN,
     HOOK_TYPE_FINAL_LOGITS,

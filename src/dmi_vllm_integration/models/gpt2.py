@@ -60,8 +60,8 @@ from vllm.model_executor.models.utils import (
     maybe_prefix,
 )
 
-from monitoring.integration_api.v1 import HookPoint
-from monitoring.integration_api.v1 import (
+from dmi_vllm_integration.dmi_api import HookPoint
+from dmi_vllm_integration.dmi_api import (
     HookSpec,
     HOOK_TYPE_RESID_PRE, HOOK_TYPE_LN1, HOOK_TYPE_ATTN_OUT,
     HOOK_TYPE_RESID_MID, HOOK_TYPE_Q, HOOK_TYPE_K, HOOK_TYPE_V,

@@ -21,7 +21,12 @@ def _install_hosted_cpu_native_contract_stub() -> None:
     if os.environ.get("DMI_VLLM_TEST_NATIVE_STUB") != "1":
         return
 
-    from monitoring import _native_engine
+    try:
+        from dmi.transport import native as _native_engine
+    except ModuleNotFoundError as exc:
+        if exc.name != "dmi":
+            raise
+        from monitoring import _native_engine
 
     class _UnavailableNative:
         def __init__(self, *args, **kwargs) -> None:

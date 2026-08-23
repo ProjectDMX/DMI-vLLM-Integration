@@ -49,7 +49,7 @@ jobs:
       - name: Verify release-runner prerequisites
         run: |
           python -c 'from importlib.metadata import version; import torch; assert version("vllm") == "0.27.1"; assert torch.cuda.is_available(); assert torch.cuda.device_count() >= 2'
-          python -c 'from monitoring.integration_api.v1 import DMI_INTEGRATION_API_VERSION; assert DMI_INTEGRATION_API_VERSION == 1'
+          python -c 'from dmi_vllm_integration.dmi_api import DMI_INTEGRATION_API_VERSION; assert DMI_INTEGRATION_API_VERSION == 1'
           clickhouse-client --host localhost --port 9000 --query 'SELECT 1'
           python -m pytest -q -m gpu tests/test_official_vllm_contract.py
       - name: Run CPU gate first

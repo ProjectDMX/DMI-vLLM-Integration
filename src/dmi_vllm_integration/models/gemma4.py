@@ -32,8 +32,8 @@ from itertools import islice
 from typing import Any
 
 import torch
-from monitoring.integration_api.v1 import HookPoint
-from monitoring.integration_api.v1 import (
+from dmi_vllm_integration.dmi_api import HookPoint
+from dmi_vllm_integration.dmi_api import (
     HOOK_TYPE_ATTN_OUT,
     HOOK_TYPE_EMBED,
     HOOK_TYPE_FINAL_LN,

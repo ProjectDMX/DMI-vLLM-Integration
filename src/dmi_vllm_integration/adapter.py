@@ -51,7 +51,7 @@ from .compat import require_compatible_runtime
 from .model_shape import make_model_shape_from_hf_config
 from .model_validation import validate_model_specific_config
 
-from monitoring.integration_api.v1 import (
+from dmi_vllm_integration.dmi_api import (
     ALL_HOOK_TYPES,
     ATTENTION_WEIGHT_HOOK_TYPES,
     BackendAdaptor,

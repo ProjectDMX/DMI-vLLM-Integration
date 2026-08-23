@@ -47,7 +47,7 @@ def _parse_version(raw_version: str, distribution: str) -> Version:
 
 def _dmi_api_version() -> int:
     try:
-        api = import_module("monitoring.integration_api.v1")
+        api = import_module("dmi_vllm_integration.dmi_api")
     except (ImportError, OSError) as exc:
         raise CompatibilityError(
             "DMI integration API v1 is unavailable; install DMI>=1.1.0,<2.0."
@@ -56,7 +56,7 @@ def _dmi_api_version() -> int:
     api_version = getattr(api, "DMI_INTEGRATION_API_VERSION", None)
     if not isinstance(api_version, int):
         raise CompatibilityError(
-            "monitoring.integration_api.v1 does not expose an integer "
+            "DMI integration API v1 does not expose an integer "
             "DMI_INTEGRATION_API_VERSION."
         )
     return api_version

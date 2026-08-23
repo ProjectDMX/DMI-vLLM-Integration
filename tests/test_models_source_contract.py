@@ -154,14 +154,19 @@ def test_model_port_has_provenance_and_external_import_boundaries(
 
     imports = [node for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)]
     assert all(node.level == 0 for node in imports)
-    dmi_imports = {
+    dmi_api_imports = {
         node.module
         for node in imports
-        if node.module is not None and node.module.startswith("monitoring")
+        if node.module is not None
+        and (
+            node.module == "dmi"
+            or node.module.startswith(("dmi.", "monitoring"))
+            or node.module == "dmi_vllm_integration.dmi_api"
+        )
     }
-    assert dmi_imports <= {"monitoring.integration_api.v1"}
+    assert dmi_api_imports <= {"dmi_vllm_integration.dmi_api"}
     if "HookPoint" in source or "HookSpec" in source:
-        assert dmi_imports == {"monitoring.integration_api.v1"}
+        assert dmi_api_imports == {"dmi_vllm_integration.dmi_api"}
 
     vllm_imports = {
         node.module
