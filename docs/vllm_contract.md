@@ -1,8 +1,8 @@
-# Official vLLM 0.27.1 contract
+# vLLM behavior assumptions
 
-This integration depends on the following behavior from official vLLM
-0.27.1. A vLLM update requires review only when it changes one of these
-assumptions or an integrated upstream model definition.
+This integration depends on the following behavior from the target official
+vLLM release, including private execution interfaces used to observe the model
+work that vLLM actually performs.
 
 ## Model runner and lifecycle
 
@@ -13,8 +13,13 @@ assumptions or an integrated upstream model definition.
 - `load_model` accepts the keyword-only `load_dummy_weights` argument and
   preserves its meaning.
 - The V1 model runner exposes `_prepare_inputs` and
-  `_determine_batch_execution_and_padding` with their 0.27.1 signatures.
+  `_determine_batch_execution_and_padding` with the signatures wrapped by the
+  integration.
 - One worker process executes at most one model forward at a time.
+- An `execute_model` update with zero scheduled tokens retires request state
+  without invoking the model.
+- An EC-transfer non-consumer updates transfer state without preparing or
+  executing a local model batch.
 
 ## Request layout
 
@@ -29,12 +34,30 @@ After `_prepare_inputs` returns:
 - each request owns one contiguous token-row interval in that order;
 - dictionary order in `scheduler_output.num_scheduled_tokens` is not required
   to equal packed order;
-- the sum of scheduled counts is the real packed token-row count; and
-- reused input-batch arrays remain valid only when snapshotted at this point.
+- the sum of scheduled counts is the real packed token-row count;
+- reused input-batch arrays remain valid only when snapshotted at this point;
+  and
+- With request-ID randomization enabled, the internal scheduler ID is the
+  external request ID followed by `-` and an eight-character hexadecimal
+  suffix. With randomization disabled, the ID is unchanged.
 
 On a prefix-cache hit, `num_computed_tokens_cpu` identifies the first token
 executed by the current forward; cached-prefix activations are absent. Final
-logits contain one row per active request in packed request order.
+logits on the next-token-only path used for capture contain one row per active
+request in packed request order.
+
+## Model input representation
+
+- On the first PP stage, the text-only preprocessing path passes `input_ids`
+  and no `inputs_embeds` to the model.
+- Enabling prompt embeddings makes preprocessing pass `inputs_embeds` and no
+  `input_ids` on the first PP stage.
+- An active decoder-only multimodal path prepares `inputs_embeds` and retains
+  `input_ids` only when the loaded model declares
+  `requires_raw_input_tokens`.
+- `MULTIMODAL_REGISTRY.supports_multimodal_inputs` returns false when every
+  supported modality has a zero limit, causing that model to use the text-only
+  path.
 
 ## Dispatch and execution rows
 
@@ -54,6 +77,19 @@ maxima bound scheduled tokens and active sequences, CUDA-graph capture sizes
 bound graph-padded rows, and SP padding rounds rows to the required TP
 multiple.
 
+## Model resolution and construction
+
+- `ModelRegistry` examines the declared architecture list in order, and
+  `ModelConfig.architecture` records the architecture vLLM resolved.
+- Model loading resolves the current `hf_config.architectures` list, including
+  registrations and architecture changes made before `load_model`; its cache
+  key includes that architecture tuple.
+- `VllmConfig.with_hf_config` supplies a child model configuration, and
+  `initialize_model(..., model_class=...)` constructs the explicitly supplied
+  model class.
+- Upstream model constructors that expose `model_cls`, `_init_model`, or an
+  explicit nested-model class honor that construction seam.
+
 ## Parallel and model layout
 
 - All ranks in a forward use compatible execution modes and descriptor shapes.
@@ -64,19 +100,34 @@ multiple.
 - TP head, KV-head, and intermediate partitions determine local tensor shapes.
 - Integrated upstream model constructors, forwards, returns, loaders,
   compilation behavior, and parallel semantics remain compatible with the
-  corresponding 0.27.1 definitions.
+  corresponding target-release definitions.
 
 ## MoE routing
 
-- `FusedMoERouter.select_experts` returns the expert IDs and weights consumed
-  by the following fused-MoE invocation.
+- `FusedMoERouter.select_experts(hidden_states, router_logits,
+  topk_indices_dtype=None, *, input_ids=None)` returns
+  `(topk_weights, topk_ids)`, the routing result consumed by the following
+  fused-MoE invocation.
 - The returned rows retain the token-major input-row order for that router
   invocation.
+- Without EPLB, returned expert IDs are global logical expert IDs.
+- `MoERunner.is_monolithic`, `is_internal_router`,
+  `do_naive_dispatch_combine`, `moe_config.pcp_size`, and
+  `moe_config.moe_parallel_config.use_all2all_kernels` describe whether routing
+  is internal and whether token rows move across ranks before routing.
+- Official `FusedMoERouter` does not define `set_routing_observer`; the
+  integration can add its process-local observer around the one authoritative
+  `select_experts` call.
 
 ## Compilation and graph replay
 
 - vLLM/PyTorch compilation retains registered custom-op nodes and their
   declared mutation and alias-ordering dependencies.
+- During construction of a `support_torch_compile` model, the compile wrapper
+  captures the instance's current bound `forward`; changing the instance class
+  afterward does not retarget that compiled callable.
+- `CUDAGraphWrapper.unwrap()` returns the underlying runnable used to derive
+  the model's hook manifest.
 - CUDA-graph replay preserves captured tensor addresses and structural shapes
   while reading current values from tensors updated in place between replays.
 - Persistent AOT-cache loading reconstructs those nodes with the same schemas
@@ -94,10 +145,3 @@ multiple.
   waits for completion.
 - Worker processes and distributed runtime remain alive until that RPC
   completes and normal server teardown begins.
-
-## Upgrade boundary
-
-Changes to the methods, call order, fields, or semantics above require an
-integration review even when their names and signatures remain unchanged.
-Changes confined to unrelated vLLM paths or non-integrated model definitions
-do not require an integration change.

@@ -19,7 +19,8 @@ _DTYPE_MAP = {
     "torch.bool": torch.bool,
 }
 
-# Map short hook name → ClickHouse act_name (must match tensor_meta.h + p2p make_act_name).
+# Map short hook name to ClickHouse act_name. Keep this explicit: the public
+# DMI integration API intentionally does not expose the native hook table.
 _BUF_TO_CH_ACT = {
     "resid_pre": "blocks.hook_resid_pre",
     "ln1": "blocks.hook_ln1",

@@ -244,19 +244,35 @@ def test_qwen2_moe_captures_the_route_consumed_by_experts(
 
 
 @pytest.mark.parametrize(
-    ("local_hook_name", "monolithic", "naive_dispatch", "pcp_gather", "error"),
     (
-        ("topk_ids", True, False, False, "requires a modular MoE backend"),
-        ("topk_weights", False, False, False, None),
-        ("topk_ids", False, True, False, "dispatch cross-rank token rows"),
-        ("topk_ids", False, False, True, "dispatch cross-rank token rows"),
-        ("router_logits", True, True, True, None),
+        "local_hook_name",
+        "monolithic",
+        "internal_router",
+        "naive_dispatch",
+        "pcp_gather",
+        "error",
+    ),
+    (
+        ("topk_ids", True, False, False, False, "requires a modular MoE backend"),
+        ("topk_weights", False, False, False, False, None),
+        ("topk_ids", False, False, True, False, "dispatch cross-rank token rows"),
+        ("topk_ids", False, False, False, True, "dispatch cross-rank token rows"),
+        ("router_logits", True, False, True, True, None),
+        (
+            "router_logits",
+            True,
+            True,
+            False,
+            False,
+            "requires a modular MoE backend",
+        ),
     ),
 )
 def test_qwen2_moe_validates_selected_routing_capture_backend(
     monkeypatch: pytest.MonkeyPatch,
     local_hook_name: str,
     monolithic: bool,
+    internal_router: bool,
     naive_dispatch: bool,
     pcp_gather: bool,
     error: str | None,
@@ -275,6 +291,7 @@ def test_qwen2_moe_validates_selected_routing_capture_backend(
 
     class FakeMoERunner:
         is_monolithic = monolithic
+        is_internal_router = internal_router
         do_naive_dispatch_combine = naive_dispatch
         moe_config = SimpleNamespace(
             pcp_size=2 if pcp_gather else 1,

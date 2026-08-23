@@ -13,9 +13,20 @@ from dmi_vllm_integration.architectures import (
 from dmi_vllm_integration.plugin import MODEL_REGISTRATIONS
 
 
-def _model_config(architectures):
+OBSOLETE_VLLM_ALIASES = {
+    "AquilaModel",
+    "AquilaForCausalLM",
+    "InternLMForCausalLM",
+    "XverseForCausalLM",
+}
+
+
+def _model_config(architectures, *, resolved=None):
+    if resolved is None and isinstance(architectures, list) and architectures:
+        resolved = architectures[0]
     return SimpleNamespace(
-        hf_config=SimpleNamespace(architectures=architectures)
+        hf_config=SimpleNamespace(architectures=architectures),
+        architecture=resolved,
     )
 
 
@@ -33,9 +44,16 @@ def test_supported_aliases_are_exactly_the_plugin_registrations() -> None:
     assert set(ARCHITECTURE_REMAP.values()) == set(MODEL_REGISTRATIONS)
 
 
+@pytest.mark.parametrize("architecture", sorted(OBSOLETE_VLLM_ALIASES))
+def test_alias_removed_from_vllm_027_is_rejected(architecture: str) -> None:
+    assert architecture not in ARCHITECTURE_REMAP
+    with pytest.raises(RuntimeError, match="resolved by vLLM"):
+        require_supported_architecture(_model_config([architecture]))
+
+
 @pytest.mark.parametrize(
     "architectures",
-    [None, [], "LlamaForCausalLM", [None], ["MistralForCausalLM"]],
+    [None, [], "LlamaForCausalLM", [None], ["MambaForCausalLM"]],
 )
 def test_missing_malformed_or_unsupported_architecture_is_rejected(
     architectures,
@@ -44,7 +62,20 @@ def test_missing_malformed_or_unsupported_architecture_is_rejected(
         require_supported_architecture(_model_config(architectures))
 
 
-def test_a_supported_fallback_in_the_declared_list_is_accepted() -> None:
+def test_vllm_resolved_architecture_wins_over_a_supported_later_entry() -> None:
+    with pytest.raises(RuntimeError, match="resolved by vLLM"):
+        require_supported_architecture(
+            _model_config(
+                ["UpstreamResolvableArchitecture", "Qwen3ForCausalLM"],
+                resolved="UpstreamResolvableArchitecture",
+            )
+        )
+
+
+def test_supported_resolved_fallback_is_accepted() -> None:
     assert require_supported_architecture(
-        _model_config(["UnknownArchitecture", "Qwen3ForCausalLM"])
-    ) == ("UnknownArchitecture", "Qwen3ForCausalLM")
+        _model_config(
+            ["UnknownArchitecture", "Qwen3ForCausalLM"],
+            resolved="Qwen3ForCausalLM",
+        )
+    ) == ("Qwen3ForCausalLM",)

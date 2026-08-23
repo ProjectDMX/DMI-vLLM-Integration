@@ -563,8 +563,9 @@ class LlamaCompareForCausalLM(
         hidden_states: torch.Tensor,
     ) -> torch.Tensor | None:
         logits = self.logits_processor(self.lm_head, hidden_states)
-        self.hook_final_logits(logits)
-        self._buf_final_logits[:logits.shape[0]].copy_(logits)
+        if logits is not None:
+            self.hook_final_logits(logits)
+            self._buf_final_logits[:logits.shape[0]].copy_(logits)
         return logits
 
     def allocate_compare_buffers(self, max_len: int, vllm_config: VllmConfig) -> None:
@@ -576,6 +577,7 @@ class LlamaCompareForCausalLM(
         hd = getattr(config, "head_dim", None) or H // nh
         V = config.vocab_size
         dtype = vllm_config.model_config.dtype
+        head_dtype = vllm_config.model_config.head_dtype
 
         from vllm.distributed.parallel_state import get_tensor_model_parallel_world_size
         tp = get_tensor_model_parallel_world_size()
@@ -608,7 +610,12 @@ class LlamaCompareForCausalLM(
         # final_logits is [num_reqs, vocab], not [total_tokens, vocab].
         # Use max_num_seqs (much smaller than max_len) to avoid OOM.
         max_reqs = vllm_config.scheduler_config.max_num_seqs
-        self._buf_final_logits = torch.empty(max_reqs, V, device=device, dtype=dtype)
+        self._buf_final_logits = torch.empty(
+            max_reqs,
+            V,
+            device=device,
+            dtype=head_dtype,
+        )
         self._buf_token_ids = torch.empty(max_len, device=device, dtype=torch.int32)
 
     def get_ref_buffers(self) -> dict[str, torch.Tensor]:

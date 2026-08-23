@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import importlib
 import inspect
 from importlib.metadata import version
 from pathlib import Path
 import sys
 from types import SimpleNamespace
+import warnings
 
 import numpy as np
 import pytest
@@ -25,7 +27,7 @@ from vllm.v1.cudagraph_dispatcher import CudagraphDispatcher
 from vllm.v1.worker.gpu_model_runner import GPUModelRunner
 from vllm.v1.worker.gpu_worker import Worker
 
-from tests import benchmark as bench_vllm_transport
+import dmi_vllm_integration.adapter as adapter_module
 from dmi_vllm_integration.adapter import (
     DMXGPUWorker,
     VLLMAdaptor,
@@ -67,8 +69,11 @@ from monitoring.integration_api.v1 import (
     hook_row_basis,
     hook_belongs_to_pp_rank,
     hook_belongs_to_tp_rank,
+    is_preset_registered,
+    register_preset,
     select_hook_specs,
 )
+from tests import benchmark as bench_vllm_transport
 from tests.compare_worker import CompareWorker
 from tests.ref_disk_worker import RefDiskWorker
 
@@ -123,12 +128,16 @@ def test_v2_model_runner_fails_before_device_initialization(monkeypatch):
     assert initialized == []
 
 
-def _worker_config_for_validation():
+def _worker_config_for_validation(hook_selection="vllm-full"):
     return SimpleNamespace(
         model_config=SimpleNamespace(
             runner_type="generate",
             model_impl="auto",
             enable_prompt_embeds=False,
+            is_multimodal_model=False,
+            is_encoder_decoder=False,
+            requires_raw_input_tokens=False,
+            architecture="LlamaForCausalLM",
             hf_config=SimpleNamespace(
                 architectures=["LlamaForCausalLM"],
             ),
@@ -142,6 +151,7 @@ def _worker_config_for_validation():
         ),
         scheduler_config=SimpleNamespace(async_scheduling=True),
         speculative_config=None,
+        additional_config={"dmx_hook_selection": hook_selection},
     )
 
 
@@ -164,22 +174,12 @@ def _worker_config_for_validation():
             "prefill context parallelism",
         ),
         (
-            lambda cfg: setattr(
-                cfg.parallel_config, "decode_context_parallel_size", 2
-            ),
-            "decode context parallelism",
-        ),
-        (
             lambda cfg: setattr(cfg.parallel_config, "use_ubatching", True),
             "ubatching",
         ),
         (
             lambda cfg: setattr(cfg.parallel_config, "enable_elastic_ep", True),
             "elastic expert",
-        ),
-        (
-            lambda cfg: setattr(cfg.model_config, "enable_prompt_embeds", True),
-            "prompt embeddings",
         ),
         (
             lambda cfg: setattr(cfg, "speculative_config", object()),
@@ -213,6 +213,363 @@ def test_worker_config_does_not_reject_async_scheduling():
     worker.vllm_config = _worker_config_for_validation()
 
     worker._validate_dmi_config()
+
+
+def test_worker_config_does_not_blanket_reject_decode_context_parallelism():
+    worker = DMXGPUWorker.__new__(DMXGPUWorker)
+    worker.use_v2_model_runner = False
+    worker.vllm_config = _worker_config_for_validation()
+    worker.vllm_config.parallel_config.decode_context_parallel_size = 2
+
+    worker._validate_dmi_config()
+
+
+@pytest.mark.parametrize(
+    ("hook_selection", "prompt_embeds", "speculative", "match"),
+    [
+        ("token_ids", True, False, "token-ID"),
+        ("final_logits", False, True, "final-logit"),
+    ],
+)
+def test_hook_specific_request_modes_are_rejected_before_cuda(
+    hook_selection, prompt_embeds, speculative, match
+):
+    worker = DMXGPUWorker.__new__(DMXGPUWorker)
+    worker.use_v2_model_runner = False
+    worker.vllm_config = _worker_config_for_validation(hook_selection)
+    worker.vllm_config.model_config.enable_prompt_embeds = prompt_embeds
+    if speculative:
+        worker.vllm_config.speculative_config = object()
+
+    with pytest.raises(RuntimeError, match=match):
+        worker._validate_dmi_config()
+
+
+@pytest.mark.parametrize(
+    ("prompt_embeds", "speculative"),
+    [(True, False), (False, True), (True, True)],
+)
+def test_unrelated_hook_selection_allows_request_modes(prompt_embeds, speculative):
+    worker = DMXGPUWorker.__new__(DMXGPUWorker)
+    worker.use_v2_model_runner = False
+    worker.vllm_config = _worker_config_for_validation("resid_pre")
+    worker.vllm_config.model_config.enable_prompt_embeds = prompt_embeds
+    if speculative:
+        worker.vllm_config.speculative_config = object()
+
+    worker._validate_dmi_config()
+    assert worker._dmx_hook_selection == "resid_pre"
+
+
+def _resolved_hook_types(selection):
+    return frozenset(
+        spec.hook_type
+        for spec in select_hook_specs(
+            [HookSpec(hook_type, None) for hook_type in ALL_HOOK_TYPES],
+            selection,
+        )
+    )
+
+
+def _set_multimodal_input_mode(
+    monkeypatch,
+    worker,
+    *,
+    active,
+    requires_raw_input_tokens=False,
+):
+    worker.vllm_config.model_config.is_multimodal_model = True
+    worker.vllm_config.model_config.requires_raw_input_tokens = (
+        requires_raw_input_tokens
+    )
+    monkeypatch.setattr(
+        adapter_module.MULTIMODAL_REGISTRY,
+        "supports_multimodal_inputs",
+        lambda _model_config: active,
+    )
+
+
+@pytest.mark.parametrize("requested", ["full", "vllm-full"])
+def test_unreachable_token_ids_are_removed_from_multi_hook_alias(
+    monkeypatch, requested
+):
+    worker = DMXGPUWorker.__new__(DMXGPUWorker)
+    worker.use_v2_model_runner = False
+    worker.vllm_config = _worker_config_for_validation(requested)
+    _set_multimodal_input_mode(monkeypatch, worker, active=True)
+
+    with pytest.warns(UserWarning) as caught:
+        worker._validate_dmi_config()
+
+    effective = worker._dmx_hook_selection
+    assert worker._dmx_requested_hook_selection == requested
+    assert effective != requested
+    assert _resolved_hook_types(effective) == (
+        _resolved_hook_types(requested) - {HOOK_TYPE_TOKEN_IDS}
+    )
+    message = str(caught[0].message)
+    assert requested in message
+    assert effective in message
+    assert "minus token_ids" in message
+
+
+def test_unreachable_token_ids_are_removed_from_custom_multi_hook_alias(
+    monkeypatch,
+):
+    alias = "__dmi_test_multi_hook_token_alias"
+    if not is_preset_registered(alias):
+        register_preset(
+            alias,
+            frozenset({HOOK_TYPE_TOKEN_IDS, HOOK_TYPE_RESID_PRE}),
+        )
+    worker = DMXGPUWorker.__new__(DMXGPUWorker)
+    worker.use_v2_model_runner = False
+    worker.vllm_config = _worker_config_for_validation(alias)
+    _set_multimodal_input_mode(monkeypatch, worker, active=True)
+
+    with pytest.warns(UserWarning, match="Removed token_ids"):
+        worker._validate_dmi_config()
+
+    assert _resolved_hook_types(worker._dmx_hook_selection) == frozenset(
+        {HOOK_TYPE_RESID_PRE}
+    )
+
+
+@pytest.mark.parametrize(
+    "requested",
+    [
+        "token_ids",
+        "token-ids",
+        "resid_pre,token_ids",
+        "token-ids,final_logits",
+        "vllm-full,token_ids",
+    ],
+)
+def test_unreachable_explicit_token_ids_fail_before_cuda(
+    monkeypatch, recwarn, requested
+):
+    initialized = []
+    monkeypatch.setattr(
+        Worker,
+        "init_device",
+        lambda _self: initialized.append(True),
+    )
+    worker = DMXGPUWorker.__new__(DMXGPUWorker)
+    worker.use_v2_model_runner = False
+    worker.vllm_config = _worker_config_for_validation(requested)
+    _set_multimodal_input_mode(monkeypatch, worker, active=True)
+
+    with pytest.raises(RuntimeError, match="explicitly selected"):
+        worker.init_device()
+
+    assert initialized == []
+    assert not recwarn
+
+
+def test_unreachable_single_hook_alias_is_explicit(monkeypatch):
+    alias = "__dmi_test_single_token_alias"
+    if not is_preset_registered(alias):
+        register_preset(alias, frozenset({HOOK_TYPE_TOKEN_IDS}))
+    worker = DMXGPUWorker.__new__(DMXGPUWorker)
+    worker.use_v2_model_runner = False
+    worker.vllm_config = _worker_config_for_validation(alias)
+    _set_multimodal_input_mode(monkeypatch, worker, active=True)
+
+    with pytest.raises(RuntimeError, match="explicitly selected"):
+        worker._validate_dmi_config()
+
+
+def test_prompt_embeds_remove_indirect_token_ids():
+    worker = DMXGPUWorker.__new__(DMXGPUWorker)
+    worker.use_v2_model_runner = False
+    worker.vllm_config = _worker_config_for_validation("vllm-full")
+    worker.vllm_config.model_config.enable_prompt_embeds = True
+
+    with pytest.warns(UserWarning, match="prompt embeddings"):
+        worker._validate_dmi_config()
+
+    assert HOOK_TYPE_TOKEN_IDS not in _resolved_hook_types(
+        worker._dmx_hook_selection
+    )
+
+
+@pytest.mark.parametrize(
+    ("is_multimodal", "multimodal_active", "requires_raw_input_tokens"),
+    [
+        (False, False, False),
+        (True, False, False),
+        (True, True, True),
+    ],
+)
+def test_reachable_token_ids_preserve_selection(
+    monkeypatch,
+    is_multimodal,
+    multimodal_active,
+    requires_raw_input_tokens,
+):
+    worker = DMXGPUWorker.__new__(DMXGPUWorker)
+    worker.use_v2_model_runner = False
+    worker.vllm_config = _worker_config_for_validation("token_ids")
+    if is_multimodal:
+        _set_multimodal_input_mode(
+            monkeypatch,
+            worker,
+            active=multimodal_active,
+            requires_raw_input_tokens=requires_raw_input_tokens,
+        )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        worker._validate_dmi_config()
+
+    assert worker._dmx_hook_selection == "token_ids"
+
+
+def test_load_model_forwards_effective_hook_selection(monkeypatch):
+    worker = DMXGPUWorker.__new__(DMXGPUWorker)
+    worker.use_v2_model_runner = False
+    worker.vllm_config = _worker_config_for_validation("vllm-full")
+    _set_multimodal_input_mode(monkeypatch, worker, active=True)
+    with pytest.warns(UserWarning):
+        worker._validate_dmi_config()
+    effective = worker._dmx_hook_selection
+
+    loaded_model = object()
+    calls = []
+    worker.model_runner = SimpleNamespace(model=loaded_model)
+    worker.adaptor = SimpleNamespace(
+        attach_model=lambda model, *, hook_selection: calls.append(
+            (model, hook_selection)
+        )
+    )
+    monkeypatch.setattr(Worker, "load_model", lambda _self, **_kwargs: None)
+
+    worker.load_model()
+
+    assert calls == [(loaded_model, effective)]
+    assert HOOK_TYPE_TOKEN_IDS not in _resolved_hook_types(effective)
+
+
+def test_invalid_hook_selection_fails_before_cuda():
+    worker = DMXGPUWorker.__new__(DMXGPUWorker)
+    worker.use_v2_model_runner = False
+    worker.vllm_config = _worker_config_for_validation("not-a-hook")
+
+    with pytest.raises(RuntimeError, match="invalid hook selection"):
+        worker._validate_dmi_config()
+
+
+@pytest.mark.parametrize(
+    ("hook_type", "sequence_parallel", "eplb", "match"),
+    [
+        (HOOK_TYPE_ROUTER_LOGITS, True, False, "sequence-parallel"),
+        (HOOK_TYPE_TOPK_IDS, True, False, "sequence-parallel"),
+        (HOOK_TYPE_TOPK_WEIGHTS, True, False, "sequence-parallel"),
+        (HOOK_TYPE_TOPK_IDS, False, True, "logical expert IDs"),
+        (HOOK_TYPE_ROUTER_LOGITS, False, True, None),
+        (HOOK_TYPE_TOPK_WEIGHTS, False, True, None),
+    ],
+)
+def test_moe_parallel_checks_follow_selected_routing_hooks(
+    monkeypatch, hook_type, sequence_parallel, eplb, match
+):
+    runner_module = importlib.import_module(
+        "vllm.model_executor.layers.fused_moe.layer"
+    )
+
+    class FakeMoERunner:
+        is_monolithic = False
+        is_internal_router = False
+        do_naive_dispatch_combine = False
+        moe_config = SimpleNamespace(
+            pcp_size=1,
+            moe_parallel_config=SimpleNamespace(use_all2all_kernels=True),
+        )
+
+    monkeypatch.setattr(runner_module, "MoERunner", FakeMoERunner)
+    model = SimpleNamespace(modules=lambda: (FakeMoERunner(),))
+    specs = (HookSpec(hook_type, None, layer_no=0),)
+    parallel = SimpleNamespace(
+        use_sequence_parallel_moe=sequence_parallel,
+        enable_eplb=eplb,
+    )
+
+    if match is None:
+        VLLMAdaptor._validate_moe_routing_capture(model, specs, parallel)
+    else:
+        with pytest.raises(RuntimeError, match=match):
+            VLLMAdaptor._validate_moe_routing_capture(model, specs, parallel)
+
+
+def test_moe_parallel_modes_allow_unrelated_selected_hooks():
+    model = SimpleNamespace(modules=lambda: ())
+    specs = (HookSpec(HOOK_TYPE_RESID_PRE, None, layer_no=0),)
+    parallel = SimpleNamespace(
+        use_sequence_parallel_moe=True,
+        enable_eplb=True,
+    )
+
+    VLLMAdaptor._validate_moe_routing_capture(model, specs, parallel)
+
+
+@pytest.mark.parametrize(
+    ("parallel", "selected_hook_type", "match"),
+    [
+        (
+            SimpleNamespace(
+                use_sequence_parallel_moe=True,
+                enable_eplb=False,
+            ),
+            HOOK_TYPE_ROUTER_LOGITS,
+            "sequence-parallel",
+        ),
+        (
+            SimpleNamespace(
+                use_sequence_parallel_moe=False,
+                enable_eplb=True,
+            ),
+            HOOK_TYPE_TOPK_IDS,
+            "logical expert IDs",
+        ),
+    ],
+)
+def test_moe_parallel_checks_use_model_wide_selection_on_nonowner_rank(
+    parallel, selected_hook_type, match
+):
+    model = SimpleNamespace(modules=lambda: ())
+    local_specs = (HookSpec(HOOK_TYPE_RESID_PRE, None, layer_no=0),)
+
+    with pytest.raises(RuntimeError, match=match):
+        VLLMAdaptor._validate_moe_routing_capture(
+            model,
+            local_specs,
+            parallel,
+            selected_hook_types=frozenset({selected_hook_type}),
+        )
+
+
+def test_model_specific_sequence_parallel_check_follows_selected_hooks():
+    model = SimpleNamespace(
+        dmi_sequence_parallel_unsupported_hook_types=frozenset({HOOK_TYPE_RESID_PRE}),
+        modules=lambda: (),
+    )
+    parallel = SimpleNamespace(
+        use_sequence_parallel_moe=True,
+        enable_eplb=False,
+    )
+
+    with pytest.raises(RuntimeError, match="model forward"):
+        VLLMAdaptor._validate_moe_routing_capture(
+            model,
+            (HookSpec(HOOK_TYPE_RESID_PRE, None, layer_no=0),),
+            parallel,
+        )
+
+    VLLMAdaptor._validate_moe_routing_capture(
+        model,
+        (HookSpec(HOOK_TYPE_FINAL_LN, None),),
+        parallel,
+    )
 
 
 @pytest.mark.parametrize("model_impl", ["auto", "vllm"])
@@ -261,6 +618,7 @@ def test_supported_architectures_pass_pre_device_validation(architecture):
     worker.use_v2_model_runner = False
     worker.vllm_config = _worker_config_for_validation()
     worker.vllm_config.model_config.hf_config.architectures = [architecture]
+    worker.vllm_config.model_config.architecture = architecture
 
     worker._validate_dmi_config()
 
@@ -270,7 +628,6 @@ def test_supported_architectures_pass_pre_device_validation(architecture):
     [
         None,
         [],
-        ["MistralForCausalLM"],
         ["Qwen2ForSequenceClassification"],
     ],
 )
@@ -287,6 +644,8 @@ def test_unsupported_architecture_fails_before_device_initialization(
     worker.use_v2_model_runner = False
     worker.vllm_config = _worker_config_for_validation()
     worker.vllm_config.model_config.hf_config.architectures = architectures
+    if isinstance(architectures, list) and architectures:
+        worker.vllm_config.model_config.architecture = architectures[0]
 
     with pytest.raises(RuntimeError, match="(?i)supported.*architecture"):
         worker.init_device()
@@ -2697,7 +3056,7 @@ def test_task_capacity_exact_fit_and_one_extra_hook_fail_attachment():
         _compile_formula_adaptor(overflow, overflow_model, "vllm-full")
 
 
-def test_compile_rejects_dp_ubatching_and_all_speculative_decoding():
+def test_compile_rejects_dp_ubatching_without_blanket_speculative_guard():
     dbo, dbo_model = _formula_adaptor(
         tp_size=1,
         tp_rank=0,
@@ -2717,10 +3076,7 @@ def test_compile_rejects_dp_ubatching_and_all_speculative_decoding():
         speculative_config=object(),
         hook_selection="resid_pre",
     )
-    with pytest.raises(RuntimeError, match="speculative"):
-        _compile_formula_adaptor(
-            speculative, speculative_model, "resid_pre"
-        )
+    _compile_formula_adaptor(speculative, speculative_model, "resid_pre")
 
 
 def test_absent_model_wide_hook_selection_produces_zero_plan():
@@ -2772,3 +3128,17 @@ def test_qwen2_moe_rejects_zero_sparse_step():
     )
     with pytest.raises(RuntimeError, match="decoder_sparse_step"):
         _is_sparse_moe_layer(config, 0)
+
+
+def test_qwen2_moe_negative_sparse_step_matches_upstream_modulo():
+    from dmi_vllm_integration.models.qwen2_moe import (
+        _is_sparse_moe_layer,
+    )
+
+    config = SimpleNamespace(
+        decoder_sparse_step=-2,
+        mlp_only_layers=[],
+        num_experts=4,
+    )
+    assert not _is_sparse_moe_layer(config, 0)
+    assert _is_sparse_moe_layer(config, 1)
