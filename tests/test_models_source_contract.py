@@ -66,9 +66,10 @@ def test_model_port_has_provenance_and_external_import_boundaries(
     dmi_imports = {
         node.module
         for node in imports
-        if node.module is not None and node.module.startswith("monitoring")
+        if node.module is not None
+        and (node.module == "dmi" or node.module.startswith("dmi."))
     }
-    assert dmi_imports == {"monitoring.integration_api.v1"}
+    assert dmi_imports == {"dmi.api.v1"}
 
     vllm_imports = {
         node.module

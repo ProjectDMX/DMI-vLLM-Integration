@@ -15,7 +15,7 @@ import re
 
 
 # Hook name shortcuts
-# Must match monitoring/ring_transport.py _HOOK_SELECTIONS presets.
+# Must match dmi/hooks/selection.py presets.
 _HOOK_SHORTCUTS = {
     "all": [
         "token_ids", "embed", "pos_embed",

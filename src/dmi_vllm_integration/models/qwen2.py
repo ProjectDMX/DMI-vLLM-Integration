@@ -45,8 +45,8 @@ from vllm.sequence import IntermediateTensors
 from vllm.transformers_utils.config import set_default_rope_theta
 from vllm.v1.attention.backend import AttentionType
 
-from monitoring.integration_api.v1 import HookPoint
-from monitoring.integration_api.v1 import (
+from dmi.api.v1 import HookPoint
+from dmi.api.v1 import (
     HOOK_TYPE_ATTN_OUT,
     HOOK_TYPE_EMBED,
     HOOK_TYPE_FINAL_LN,

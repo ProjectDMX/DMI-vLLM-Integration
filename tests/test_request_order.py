@@ -36,7 +36,7 @@ from dmi_vllm_integration.adapter import (
     _VLLMRoleFormula,
     _VLLMStepState,
 )
-from monitoring.integration_api.v1 import (
+from dmi.api.v1 import (
     ALL_HOOK_TYPES,
     BackendAdaptor,
     HOOK_TYPE_ATTN_OUT,

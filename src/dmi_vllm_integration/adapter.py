@@ -1,8 +1,7 @@
 """vLLM integration: VLLMAdaptor + monitored GPU worker.
 
 Phase 3a of the unified-adaptor refactor consolidates the vLLM-specific
-orchestration that used to live in ``monitoring/vllm_integration.py``
-into one file under ``integration/``.
+orchestration that used to live in DMI core into this integration package.
 
 Key pieces:
 
@@ -19,7 +18,7 @@ Key pieces:
     ``VLLMAdaptor``, records the real input layout, and commits at real
     dispatch. Architecture remap stays here.
   * Module-level ``register_preset("vllm-full", ...)`` -- relocated
-    from ``monitoring/selection.py``'s default ``_HOOK_SELECTIONS``
+    from ``dmi/hooks/selection.py``'s default ``_HOOK_SELECTIONS``
     (deferred from Phase 1.5 per the unified-adaptor plan).  Lands as
     a side-effect of importing this module.
 
@@ -48,7 +47,7 @@ from .architectures import (
 )
 from .compat import require_compatible_runtime
 
-from monitoring.integration_api.v1 import (
+from dmi.api.v1 import (
     ALL_HOOK_TYPES,
     ATTENTION_WEIGHT_HOOK_TYPES,
     BackendAdaptor,
@@ -85,7 +84,7 @@ require_compatible_runtime()
 # ---------------------------------------------------------------------------
 # vLLM-full preset registration (deferred from Phase 1.5).
 #
-# Moved out of monitoring/selection.py's default _HOOK_SELECTIONS so the
+# Moved out of dmi/hooks/selection.py's default _HOOK_SELECTIONS so the
 # core selection module is framework-neutral.  Registers when this
 # module is imported -- which happens whenever DMXGPUWorker is loaded
 # via worker_cls="dmi_vllm_integration.worker.DMXGPUWorker".

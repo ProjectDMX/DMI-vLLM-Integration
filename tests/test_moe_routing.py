@@ -9,7 +9,7 @@ import pytest
 from transformers import Qwen2MoeConfig
 
 from dmi_vllm_integration.adapter import _ARCH_REMAP
-from monitoring.integration_api.v1 import (
+from dmi.api.v1 import (
     HOOK_TYPE_ROUTER_LOGITS,
     HOOK_TYPE_TOPK_IDS,
     HOOK_TYPE_TOPK_WEIGHTS,

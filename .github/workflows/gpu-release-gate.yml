@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ProjectDMX/DMI
-          ref: 13a964319fcda70e45e3d61098d15fd8d628c410
+          ref: 80709fbffb5c1b268c9f23a9b64a904b28a1b15f
           path: .ci/dmi
           submodules: false
       - uses: actions/setup-python@v5
@@ -42,16 +42,16 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install 'vllm==0.27.1' clickhouse-driver pytest
-          git -C .ci/dmi submodule update --init --depth 1 libs/clickhouse-cpp
-          cmake -S .ci/dmi/libs/clickhouse-cpp -B .ci/dmi/libs/clickhouse-cpp/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON
-          cmake --build .ci/dmi/libs/clickhouse-cpp/build -j2
-          make -C .ci/dmi/monitoring -j2
+          git -C .ci/dmi submodule update --init --depth 1 third_party/clickhouse-cpp
+          cmake -S .ci/dmi/third_party/clickhouse-cpp -B .ci/dmi/third_party/clickhouse-cpp/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+          cmake --build .ci/dmi/third_party/clickhouse-cpp/build -j2
+          make -C .ci/dmi/native -j2
           python -m pip install --no-deps --editable .ci/dmi
           python -m pip install --no-deps --editable .
       - name: Verify release-runner prerequisites
         run: |
           python -c 'from importlib.metadata import version; import torch; assert version("vllm") == "0.27.1"; assert torch.cuda.is_available(); assert torch.cuda.device_count() >= 2'
-          python -c 'from monitoring.integration_api.v1 import DMI_INTEGRATION_API_VERSION; assert DMI_INTEGRATION_API_VERSION == 1'
+          python -c 'from dmi.api.v1 import DMI_INTEGRATION_API_VERSION; assert DMI_INTEGRATION_API_VERSION == 1'
           clickhouse-client --host localhost --port 9000 --query 'SELECT 1'
           python -m pytest -q -m gpu tests/test_official_vllm_contract.py
       - name: Run CPU gate first

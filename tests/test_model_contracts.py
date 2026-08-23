@@ -262,7 +262,7 @@ def test_qwen2_moe_validates_selected_routing_capture_backend(
     error: str | None,
 ) -> None:
     from dmi_vllm_integration.adapter import VLLMAdaptor
-    from monitoring.integration_api.v1 import (
+    from dmi.api.v1 import (
         HOOK_TYPE_ROUTER_LOGITS,
         HOOK_TYPE_TOPK_IDS,
         HOOK_TYPE_TOPK_WEIGHTS,
