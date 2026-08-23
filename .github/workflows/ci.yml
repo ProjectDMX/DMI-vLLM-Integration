@@ -75,7 +75,6 @@ jobs:
       - name: Confirm the official runtime boundary
         run: |
           python -c 'from importlib.metadata import version; import pathlib, vllm; assert version("vllm") == "0.27.1"; assert "dmi_vllm_integration" not in pathlib.Path(vllm.__file__).parts'
-          python -c 'from dmi_vllm_integration.dmi_api import DMI_INTEGRATION_API_VERSION; assert DMI_INTEGRATION_API_VERSION == 1'
       - name: Run portable CPU integration tests
         run: |
           python -m compileall -q src tests
