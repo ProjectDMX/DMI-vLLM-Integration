@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import inspect
 from importlib.metadata import version
+from importlib.util import find_spec
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -16,10 +17,6 @@ import torch
 import torch.nn as nn
 
 import vllm
-try:
-    import vllm._C as _vllm_native_extension
-except ModuleNotFoundError:
-    import vllm._C_stable_libtorch as _vllm_native_extension
 from vllm.compilation.cuda_graph import CUDAGraphWrapper
 from vllm.config import CUDAGraphMode
 from vllm.forward_context import BatchDescriptor
@@ -80,10 +77,19 @@ from tests.ref_disk_worker import RefDiskWorker
 
 def test_runtime_uses_the_supported_installed_vllm_and_extension():
     source = Path(vllm.__file__).resolve()
-    extension = Path(_vllm_native_extension.__file__).resolve()
+    native_spec = next(
+        (
+            spec
+            for module_name in ("vllm._C", "vllm._C_stable_libtorch")
+            if (spec := find_spec(module_name)) is not None
+            and spec.origin is not None
+        ),
+        None,
+    )
 
     assert version("vllm") == "0.27.1"
-    assert source.parent == extension.parent
+    assert native_spec is not None
+    assert source.parent == Path(native_spec.origin).resolve().parent
     assert "dmi_vllm_integration" not in source.parts
 
 
