@@ -6,8 +6,8 @@ from typing import Any
 
 import torch
 
-from monitoring.integration_api.v1 import ModelShapeConfig
-from monitoring.integration_api.v1 import (
+from dmi_vllm_integration.dmi_api import ModelShapeConfig
+from dmi_vllm_integration.dmi_api import (
     make_model_shape_from_hf_config as _make_public_model_shape,
 )
 

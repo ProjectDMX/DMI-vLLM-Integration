@@ -41,9 +41,15 @@ jobs:
           if-no-files-found: error
 
   cpu:
-    name: Official vLLM 0.27.1 portable CPU gate
+    name: Official vLLM 0.27.1 / DMI ${{ matrix.dmi_ref }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        dmi_ref:
+          - v1.1.0
+          - main
     env:
       DMI_VLLM_TEST_NATIVE_STUB: "1"
       NUMBA_DISABLE_JIT: "1"
@@ -53,7 +59,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ProjectDMX/DMI
-          ref: v1.1.0
+          ref: ${{ matrix.dmi_ref }}
           path: .ci/dmi
           submodules: false
       - uses: actions/setup-python@v5
@@ -68,8 +74,8 @@ jobs:
           python -m pip install --no-deps --editable .
       - name: Confirm the official runtime boundary
         run: |
-          python -c 'from importlib.metadata import version; import pathlib, vllm; assert version("DMI") == "1.1.0"; assert version("vllm") == "0.27.1"; assert "dmi_vllm_integration" not in pathlib.Path(vllm.__file__).parts'
-          python -c 'from pathlib import Path; source = Path(".ci/dmi/monitoring/integration_api/v1/__init__.py").read_text(); assert "DMI_INTEGRATION_API_VERSION = 1" in source'
+          python -c 'from importlib.metadata import version; import pathlib, vllm; assert version("vllm") == "0.27.1"; assert "dmi_vllm_integration" not in pathlib.Path(vllm.__file__).parts'
+          python -c 'from dmi_vllm_integration.dmi_api import DMI_INTEGRATION_API_VERSION; assert DMI_INTEGRATION_API_VERSION == 1'
       - name: Run portable CPU integration tests
         run: |
           python -m compileall -q src tests
