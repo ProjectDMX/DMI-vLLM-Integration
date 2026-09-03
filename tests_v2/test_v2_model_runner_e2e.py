@@ -48,7 +48,7 @@ def _run_inference(
     command = [
         sys.executable,
         "-m",
-        "tests.vllm_logprob_runner",
+        "tests_v2.vllm_logprob_runner",
         "--output",
         str(output),
     ]

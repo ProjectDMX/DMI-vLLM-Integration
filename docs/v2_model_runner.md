@@ -39,6 +39,12 @@ mismatch. It must not infer block contents from counts.
 
 ## Supported and excluded paths
 
+The public worker entry point is a lazy selector over two implementation
+modules. A V1 selection imports only the unchanged V1 adapter; a V2 selection
+loads the isolated `dmi_vllm_integration.v2` implementation. The selector uses
+vLLM's resolved `VllmConfig.use_v2_model_runner` property, preserving vLLM's
+architecture and feature-dependent default.
+
 | Path | Status |
 |---|---|
 | V1 generation runner | Supported unchanged |

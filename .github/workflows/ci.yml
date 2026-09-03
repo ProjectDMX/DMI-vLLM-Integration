@@ -33,7 +33,7 @@ jobs:
           python -m build
           python -m twine check dist/*
           python -m pip install --no-deps dist/*.whl
-          python -c 'from importlib.metadata import distribution; d = distribution("DMI-vLLM-Integration"); eps = {(e.group, e.name) for e in d.entry_points}; assert d.version == "0.27.1"; assert ("vllm.general_plugins", "dmi_models") in eps; assert ("vllm.endpoint_plugins", "dmi_stop_monitoring") in eps'
+          python -c 'from importlib.metadata import distribution; from importlib.util import find_spec; d = distribution("DMI-vLLM-Integration"); eps = {(e.group, e.name) for e in d.entry_points}; assert d.version == "0.27.1"; assert ("vllm.general_plugins", "dmi_models") in eps; assert ("vllm.endpoint_plugins", "dmi_stop_monitoring") in eps; assert find_spec("dmi_vllm_integration.v2.worker") is not None'
       - uses: actions/upload-artifact@v4
         with:
           name: distributions
@@ -77,5 +77,8 @@ jobs:
           python -c 'from importlib.metadata import version; import pathlib, vllm; assert version("vllm") == "0.27.1"; assert "dmi_vllm_integration" not in pathlib.Path(vllm.__file__).parts'
       - name: Run portable CPU integration tests
         run: |
-          python -m compileall -q src tests
+          python -m compileall -q src tests tests_v2
           python -m pytest -q -m "not gpu and not clickhouse and not e2e and not slow"
+      - name: Run isolated V2 and worker-selection contracts
+        run: |
+          python -m pytest -q tests_v2/test_worker_selector.py tests_v2/test_v2_adapter.py

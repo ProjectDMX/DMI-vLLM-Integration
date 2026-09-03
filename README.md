@@ -26,6 +26,11 @@ initialization because its computed-token accounting is not yet part of this
 contract. Other unsupported architectures and parallel modes are also rejected
 before model execution.
 
+The public `dmi_vllm_integration.worker.DMXGPUWorker` entry point reads vLLM's
+resolved `use_v2_model_runner` setting and lazily constructs the matching
+implementation. The existing V1 adapter does not import or execute the V2
+implementation, which is isolated under `dmi_vllm_integration.v2`.
+
 ## Model support
 
 The following model families are available in this source tree. Experimental

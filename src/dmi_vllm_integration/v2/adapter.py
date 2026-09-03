@@ -8,7 +8,8 @@ Key pieces:
 
   * ``VLLMAdaptor`` -- concrete ``BackendAdaptor`` for vLLM models.
     Owns the framework-fragile pieces in localized methods:
-      ``_record_real_layout`` (copies post-prepare packed request order);
+      ``_record_real_layout`` (copies post-prepare packed request order for
+      either model runner);
       ``_preflight_force_eager`` (evaluates cached worst-role formulas);
       ``build_step_context`` (uses the real layout and batch descriptor);
       ``adapt_for_cpu_direct`` (swaps padded -> unpadded q_len when an
@@ -16,8 +17,8 @@ Key pieces:
       ``before_forward`` (commits one already-computed actual plan);
       ``_warn_once_capacity`` (per-(total_q, num_reqs) shape warn).
   * ``DMXGPUWorker`` -- vLLM ``Worker`` subclass that owns a
-    ``VLLMAdaptor``, records the real input layout, and commits at real
-    dispatch. Architecture remap stays here.
+    ``VLLMAdaptor``, records the real input layout, and commits after the real
+    dispatch but before model forward. Architecture remap stays here.
   * Module-level ``register_preset("vllm-full", ...)`` -- relocated
     from ``monitoring/selection.py``'s default ``_HOOK_SELECTIONS``
     (deferred from Phase 1.5 per the unified-adaptor plan).  Lands as
@@ -43,13 +44,13 @@ from vllm.distributed.ec_transfer import get_ec_transfer, has_ec_transfer
 from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.v1.worker.gpu_worker import Worker
 
-from .architectures import (
+from ..architectures import (
     ARCHITECTURE_REMAP as _ARCH_REMAP,
     require_supported_architecture,
 )
-from .compat import require_compatible_runtime
-from .model_shape import make_model_shape_from_hf_config
-from .model_validation import validate_model_specific_config
+from ..compat import require_compatible_runtime
+from ..model_shape import make_model_shape_from_hf_config
+from ..model_validation import validate_model_specific_config
 
 from dmi_vllm_integration.dmi_api import (
     ALL_HOOK_TYPES,
@@ -587,6 +588,17 @@ class VLLMAdaptor(BackendAdaptor):
             return pad_table[total_q]
         return total_q
 
+    @staticmethod
+    def _input_ids_dtype(model_runner: Any) -> Optional[torch.dtype]:
+        """Return the runner-owned token buffer dtype without a device copy."""
+        input_ids = getattr(model_runner, "input_ids", None)
+        if input_ids is not None:
+            gpu = getattr(input_ids, "gpu", None)
+            return getattr(gpu, "dtype", None)
+
+        input_buffers = getattr(model_runner, "input_buffers", None)
+        return getattr(getattr(input_buffers, "input_ids", None), "dtype", None)
+
     def build_step_context(
         self, scheduler_output: Any, model_runner: Any
     ) -> Optional[StepContext]:
@@ -620,11 +632,10 @@ class VLLMAdaptor(BackendAdaptor):
                     flush=True,
                 )
 
-        # Read input_ids dtype from model_runner buffer.  On non-first
-        # PP ranks the buffer may not exist; pass None (the token_ids
-        # hook is already filtered out by filter_by_pp_rank).
-        ids_buf = getattr(model_runner, "input_ids", None)
-        ids_dtype = ids_buf.gpu.dtype if ids_buf is not None else None
+        # Read the V1 or V2 runner-owned input buffer without copying it. On
+        # non-first PP ranks the buffer may not exist; token_ids is already
+        # filtered out by PP placement there.
+        ids_dtype = self._input_ids_dtype(model_runner)
 
         tp_rank, dp_rank, ep_rank, pp_rank = self.detect_parallel_ranks()
 
@@ -971,26 +982,56 @@ class VLLMAdaptor(BackendAdaptor):
         model_runner: Any,
         num_scheduled_tokens: Any,
     ) -> None:
-        """Copy and validate the packed order produced by real vLLM prep."""
+        """Copy the packed order produced by V1 input preparation."""
+        input_batch = model_runner.input_batch
+        num_reqs = int(input_batch.num_reqs)
+        self._record_packed_layout(
+            scheduler_output,
+            num_reqs=num_reqs,
+            raw_req_ids=input_batch.req_ids[:num_reqs],
+            scheduled_counts=num_scheduled_tokens[:num_reqs],
+            computed_counts=input_batch.num_computed_tokens_cpu[:num_reqs],
+            boundary="_prepare_inputs",
+        )
+
+    def _record_v2_real_layout(
+        self,
+        scheduler_output: Any,
+        input_batch: Any,
+    ) -> None:
+        """Copy the packed order produced by V2 ``prepare_inputs``."""
+        num_reqs = int(input_batch.num_reqs)
+        self._record_packed_layout(
+            scheduler_output,
+            num_reqs=num_reqs,
+            raw_req_ids=input_batch.req_ids[:num_reqs],
+            scheduled_counts=input_batch.num_scheduled_tokens[:num_reqs],
+            computed_counts=input_batch.num_computed_tokens_np[:num_reqs],
+            boundary="prepare_inputs",
+        )
+
+    def _record_packed_layout(
+        self,
+        scheduler_output: Any,
+        *,
+        num_reqs: int,
+        raw_req_ids: Any,
+        scheduled_counts: Any,
+        computed_counts: Any,
+        boundary: str,
+    ) -> None:
+        """Validate and snapshot one runner's CPU-side packed layout."""
         state = self._step_state
         if state.phase is not VLLMStepPhase.ARMED:
             raise RuntimeError(
-                "DMI vLLM observed duplicate or unarmed _prepare_inputs"
+                f"DMI vLLM observed duplicate or unarmed {boundary}"
             )
         if state.scheduler_output is not scheduler_output:
             raise RuntimeError("DMI vLLM scheduler output changed during prep")
 
-        num_reqs = int(model_runner.input_batch.num_reqs)
-        raw_req_ids = tuple(model_runner.input_batch.req_ids[:num_reqs])
-        scheduled_counts = tuple(
-            int(value) for value in num_scheduled_tokens
-        )
-        computed_counts = tuple(
-            int(value)
-            for value in model_runner.input_batch.num_computed_tokens_cpu[
-                :num_reqs
-            ]
-        )
+        raw_req_ids = tuple(raw_req_ids)
+        scheduled_counts = tuple(int(value) for value in scheduled_counts)
+        computed_counts = tuple(int(value) for value in computed_counts)
         if (
             len(raw_req_ids) != num_reqs
             or len(scheduled_counts) != num_reqs
@@ -1240,6 +1281,43 @@ class VLLMAdaptor(BackendAdaptor):
             state.expected_dispatch = None
         return force_eager
 
+    def _preflight_v2_force_eager(
+        self,
+        batch_descriptor: Any,
+        *,
+        num_tokens: int,
+        num_reqs: int,
+    ) -> bool:
+        """Check a V2 dispatch candidate before it becomes the real batch."""
+        execution_rows = int(batch_descriptor.num_tokens)
+        real_rows = int(num_tokens)
+        request_rows = int(num_reqs)
+        if execution_rows < real_rows:
+            raise RuntimeError(
+                "DMI vLLM V2 dispatch has fewer rows than scheduled tokens"
+            )
+
+        state = self._step_state
+        state.capacity_candidate = (
+            batch_descriptor.cg_mode,
+            batch_descriptor,
+        )
+        state.execution_bound = None
+        state.real_rows_bound = None
+        state.request_rows_bound = None
+        worst_bytes = max(
+            (
+                formula.bytes_for(
+                    execution_rows,
+                    real_rows,
+                    request_rows,
+                )
+                for formula in self._role_formulas
+            ),
+            default=0,
+        )
+        return worst_bytes > self._byte_capacity
+
     def _commit_actual_dispatch(
         self,
         scheduler_output: Any,
@@ -1369,7 +1447,7 @@ def _row_bytes_for_spec(spec, model_cfg) -> int:
 # ---------------------------------------------------------------------------
 
 
-class DMXGPUWorker(Worker):
+class DMXV2GPUWorker(Worker):
     """vLLM ``Worker`` subclass that owns a ``VLLMAdaptor`` and
     delegates per-step work to it.
 
@@ -1393,14 +1471,15 @@ class DMXGPUWorker(Worker):
         self._dmx_requested_hook_selection: str = "vllm-full"
         self._dmx_hook_selection: str = "vllm-full"
         self._dmx_stopped = False
+        self._dmx_v2_dispatch_manager: Any = None
+        self._dmx_v2_original_dispatch: Any = None
 
     def _validate_dmi_config(self) -> None:
-        """Reject unsupported V1-generation configurations before CUDA init."""
-        if getattr(self, "use_v2_model_runner", False):
+        """Reject unsupported runner configurations before CUDA init."""
+        if not getattr(self, "use_v2_model_runner", False):
             raise RuntimeError(
-                "DMI does not yet support vLLM's V2 model runner. "
-                "Set VLLM_USE_V2_MODEL_RUNNER=0 before constructing the "
-                "vLLM engine to select the supported V1 runner."
+                "DMXV2GPUWorker requires "
+                "vLLM's V2 model runner"
             )
 
         config = self.vllm_config
@@ -1435,7 +1514,7 @@ class DMXGPUWorker(Worker):
         architectures = require_supported_architecture(model)
         validate_model_specific_config(config, architectures)
         if model.runner_type != "generate":
-            raise RuntimeError("DMI vLLM supports only the V1 generate runner")
+            raise RuntimeError("DMI vLLM supports only the generate runner")
         if int(parallel.data_parallel_size) > 1:
             raise RuntimeError("DMI vLLM does not support data parallelism")
         if int(getattr(parallel, "prefill_context_parallel_size", 1)) > 1:
@@ -1447,6 +1526,14 @@ class DMXGPUWorker(Worker):
         if getattr(parallel, "enable_elastic_ep", False):
             raise RuntimeError(
                 "DMI vLLM does not support elastic expert parallelism"
+            )
+        if (
+            getattr(self, "use_v2_model_runner", False)
+            and config.speculative_config is not None
+        ):
+            raise RuntimeError(
+                "DMI vLLM V2 model-runner support does not yet include "
+                "speculative decoding"
             )
         if HOOK_TYPE_TOKEN_IDS in selected_hook_types:
             unavailable_reason = _token_ids_unavailability_reason(model)
@@ -1489,6 +1576,136 @@ class DMXGPUWorker(Worker):
         self._dmx_hook_selection = effective_hook_selection
         if selection_warning is not None:
             warnings.warn(selection_warning, UserWarning, stacklevel=2)
+
+    def _install_v2_prepare_wrapper(self) -> None:
+        """Commit V2's prepared layout before attention and model forward."""
+        adaptor = self.adaptor
+        if adaptor is None:
+            raise RuntimeError("DMI vLLM V2 wrapper requires an adaptor")
+        model_runner = self.model_runner
+        original_prepare = model_runner.prepare_inputs
+
+        def _wrapped_prepare_inputs(
+            scheduler_output: Any,
+            batch_desc: Any,
+        ) -> Any:
+            input_batch = original_prepare(scheduler_output, batch_desc)
+            state = adaptor._step_state
+            if state.phase is VLLMStepPhase.ARMED:
+                adaptor._record_v2_real_layout(
+                    scheduler_output,
+                    input_batch,
+                )
+                if state.capacity_candidate is None:
+                    force_eager = adaptor._preflight_v2_force_eager(
+                        batch_desc,
+                        num_tokens=input_batch.num_tokens,
+                        num_reqs=input_batch.num_reqs,
+                    )
+                    if force_eager:
+                        from vllm.config import CUDAGraphMode
+
+                        if batch_desc.cg_mode is not CUDAGraphMode.NONE:
+                            raise RuntimeError(
+                                "DMI vLLM V2 dispatch bypassed the "
+                                "eager-capacity preflight"
+                            )
+                        # Encoder/model-specific paths can bypass the graph
+                        # manager after vLLM has selected eager execution.
+                        state.force_eager_latch = True
+                if adaptor._validation_mode is VLLMValidationMode.VERIFY:
+                    state.expected_dispatch = (
+                        batch_desc.cg_mode,
+                        batch_desc,
+                    )
+                adaptor._commit_actual_dispatch(
+                    scheduler_output,
+                    model_runner,
+                    batch_desc.cg_mode,
+                    batch_desc,
+                    state.force_eager_latch,
+                )
+            elif state.phase is not VLLMStepPhase.IDLE:
+                raise RuntimeError(
+                    "DMI vLLM observed a second V2 prepare_inputs in one step"
+                )
+            return input_batch
+
+        model_runner.prepare_inputs = _wrapped_prepare_inputs
+
+    def _ensure_v2_dispatch_wrapper(self) -> None:
+        """Wrap V2 graph selection once its manager has been initialized."""
+        manager = getattr(self.model_runner, "cudagraph_manager", None)
+        if manager is None:
+            raise RuntimeError(
+                "DMI vLLM V2 runner has no initialized CUDA-graph manager"
+            )
+        if getattr(self, "_dmx_v2_dispatch_manager", None) is manager:
+            return
+        if getattr(self, "_dmx_v2_dispatch_manager", None) is not None:
+            raise RuntimeError("DMI vLLM V2 CUDA-graph manager changed at runtime")
+
+        adaptor = self.adaptor
+        if adaptor is None:
+            raise RuntimeError("DMI vLLM V2 dispatch wrapper requires an adaptor")
+        original_dispatch = manager.dispatch
+
+        def _wrapped_dispatch(
+            num_reqs: int,
+            num_tokens: int,
+            uniform_token_count: Optional[int],
+            num_active_loras: int,
+        ) -> Any:
+            candidate = original_dispatch(
+                num_reqs,
+                num_tokens,
+                uniform_token_count,
+                num_active_loras,
+            )
+            state = adaptor._step_state
+            if state.phase is VLLMStepPhase.IDLE:
+                return candidate
+            if state.phase is not VLLMStepPhase.ARMED:
+                raise RuntimeError(
+                    f"DMI vLLM observed V2 dispatch in phase {state.phase}"
+                )
+
+            force_eager = adaptor._preflight_v2_force_eager(
+                candidate,
+                num_tokens=num_tokens,
+                num_reqs=num_reqs,
+            )
+            state.force_eager_latch |= force_eager
+            if force_eager:
+                from vllm.config import CUDAGraphMode
+                from vllm.v1.worker.gpu.cudagraph_utils import (
+                    BatchExecutionDescriptor,
+                )
+
+                candidate = BatchExecutionDescriptor(
+                    cg_mode=CUDAGraphMode.NONE,
+                    num_tokens=num_tokens,
+                    num_reqs=num_reqs,
+                    num_active_loras=num_active_loras,
+                )
+            if adaptor._validation_mode is VLLMValidationMode.VERIFY:
+                state.expected_dispatch = (
+                    candidate.cg_mode,
+                    candidate,
+                )
+            return candidate
+
+        manager.dispatch = _wrapped_dispatch
+        self._dmx_v2_dispatch_manager = manager
+        self._dmx_v2_original_dispatch = original_dispatch
+
+    def _restore_v2_dispatch_wrapper(self) -> None:
+        manager = getattr(self, "_dmx_v2_dispatch_manager", None)
+        original_dispatch = getattr(self, "_dmx_v2_original_dispatch", None)
+        if manager is not None and original_dispatch is not None:
+            manager.dispatch = original_dispatch
+        self._dmx_v2_dispatch_manager = None
+        self._dmx_v2_original_dispatch = None
 
     def init_device(self) -> None:
         self._validate_dmi_config()
@@ -1573,6 +1790,24 @@ class DMXGPUWorker(Worker):
         # DMI's transport and native active-engine slots are process/device
         # global. This integration therefore assumes one active monitored
         # engine/forward owner per process.
+        if getattr(self, "use_v2_model_runner", False):
+            self._install_v2_prepare_wrapper()
+
+            # Backwards-compat attributes for external subclasses that read
+            # the pre-refactor names (e.g. tests/compare_worker.py reads
+            # `self._dmx_tp_rank` + `self._dmx_tp_size` to format per-rank
+            # filenames).
+            from vllm.distributed.parallel_state import get_tp_group
+            tp_rank, dp_rank, ep_rank, pp_rank = (
+                self.adaptor.detect_parallel_ranks()
+            )
+            self._dmx_tp_rank = tp_rank
+            self._dmx_dp_rank = dp_rank
+            self._dmx_ep_rank = ep_rank
+            self._dmx_pp_rank = pp_rank
+            self._dmx_tp_size = get_tp_group().world_size
+            return
+
         adaptor = self.adaptor
         model_runner = self.model_runner
         orig_prepare = model_runner._prepare_inputs
@@ -1812,6 +2047,8 @@ class DMXGPUWorker(Worker):
         )
         state = adaptor._step_state
         try:
+            if getattr(self, "use_v2_model_runner", False):
+                self._ensure_v2_dispatch_wrapper()
             result = super().execute_model(scheduler_output)
             if state.phase is not VLLMStepPhase.COMMITTED:
                 raise RuntimeError(
@@ -1836,6 +2073,7 @@ class DMXGPUWorker(Worker):
         if torch.cuda.is_available():
             torch.cuda.synchronize()
 
+        self._restore_v2_dispatch_wrapper()
         if self.adaptor is not None:
             adaptor = self.adaptor
             self.adaptor = None
@@ -1898,13 +2136,13 @@ class DMILLM(LLM):
     (``dmx_model_id``, ``dmx_db_host``, ``dmx_db_port``, ``dmx_hook_selection``, ...).
     """
 
-    _WORKER_CLS = "dmi_vllm_integration.worker.DMXGPUWorker"
+    _WORKER_CLS = "dmi_vllm_integration.v2.worker.DMXV2GPUWorker"
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         worker_cls = kwargs.get("worker_cls")
         if worker_cls is not None and worker_cls not in (
             self._WORKER_CLS,
-            DMXGPUWorker,
+            DMXV2GPUWorker,
         ):
             raise ValueError(
                 "DMILLM requires worker_cls="
@@ -2006,7 +2244,7 @@ class DMILLM(LLM):
 
 __all__ = [
     "VLLMAdaptor",
-    "DMXGPUWorker",
+    "DMXV2GPUWorker",
     "DMILLM",
     "normalize_vllm_request_id",
 ]
