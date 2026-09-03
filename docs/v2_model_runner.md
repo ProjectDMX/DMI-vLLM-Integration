@@ -39,15 +39,17 @@ mismatch. It must not infer block contents from counts.
 
 ## Supported and excluded paths
 
-The public worker entry point is a lazy selector over two implementation
-modules. A V1 selection imports only the unchanged V1 adapter; a V2 selection
-loads the isolated `dmi_vllm_integration.v2` implementation. The selector uses
-vLLM's resolved `VllmConfig.use_v2_model_runner` property, preserving vLLM's
-architecture and feature-dependent default.
+The public worker entry point imports and inherits the existing V1 worker to
+preserve its subclass behavior. It uses vLLM's resolved
+`VllmConfig.use_v2_model_runner` property, preserving vLLM's architecture and
+feature-dependent default. A V1 construction performs the neutral selection
+check without importing V2; a V2 construction lazily imports the isolated
+`dmi_vllm_integration.v2` implementation. Custom V2 workers must subclass
+`dmi_vllm_integration.v2.worker.DMXV2GPUWorker` directly.
 
 | Path | Status |
 |---|---|
-| V1 generation runner | Supported unchanged |
+| V1 generation runner | Adapter and execution logic unchanged; public entry performs one neutral selection check |
 | V2 generation runner, regular decoding | Supported |
 | V2 CUDA graphs | Supported; DMI capacity fallback selects eager before input preparation |
 | V2 prefix-cached regular decoding | Supported by computed-token range accounting |
@@ -63,7 +65,7 @@ without a separate accepted-token integration.
 
 Portable tests cover V1 regression, V2 config validation, request reordering,
 computed/scheduled count snapshots, method-signature drift, real descriptor
-use, graph-to-eager capacity fallback, idle passthrough, and wrapper teardown.
+use, graph-to-eager capacity fallback, and wrapper teardown.
 
 The GPU black-box test runs stock and DMI-enabled V2 in separate processes on
 Qwen3-0.6B with a fixed ragged batch and CUDA graphs enabled. It requires exact
