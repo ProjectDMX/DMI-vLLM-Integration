@@ -6,7 +6,8 @@ work that vLLM actually performs.
 
 ## Model runner and lifecycle
 
-- The V1 GPU model runner is selected; the V2 runner is outside this contract.
+- Both the V1 and V2 GPU model runners are supported. vLLM may select V2 by
+  default for architectures that opt into it.
 - Worker initialization calls `init_device`, `load_model`,
   `compile_or_warm_up_model`, `execute_model`, and `shutdown` in their expected
   lifecycle order.
@@ -15,11 +16,16 @@ work that vLLM actually performs.
 - The V1 model runner exposes `_prepare_inputs` and
   `_determine_batch_execution_and_padding` with the signatures wrapped by the
   integration.
+- The V2 model runner exposes `prepare_inputs`, and its initialized
+  `cudagraph_manager` exposes `dispatch`, with the signatures wrapped by the
+  integration.
 - One worker process executes at most one model forward at a time.
 - An `execute_model` update with zero scheduled tokens retires request state
   without invoking the model.
 - An EC-transfer non-consumer updates transfer state without preparing or
   executing a local model batch.
+- V2 speculative decoding is outside this contract and is rejected before
+  device initialization.
 
 ## Request layout
 
@@ -27,10 +33,12 @@ For an `execute_model` call that produces a forward, vLLM updates request
 state and `input_batch`, prepares inputs, determines final execution and
 padding, and then runs the model with that layout.
 
-After `_prepare_inputs` returns:
+After V1 `_prepare_inputs` or V2 `prepare_inputs` returns:
 
 - `input_batch.req_ids[:input_batch.num_reqs]` is packed model-tensor order;
-- scheduled-token counts and `num_computed_tokens_cpu` align with those IDs;
+- scheduled-token counts align with those IDs;
+- V1 `input_batch.num_computed_tokens_cpu` and V2
+  `InputBatch.num_computed_tokens_np` align with those IDs;
 - each request owns one contiguous token-row interval in that order;
 - dictionary order in `scheduler_output.num_scheduled_tokens` is not required
   to equal packed order;
@@ -41,10 +49,18 @@ After `_prepare_inputs` returns:
   external request ID followed by `-` and an eight-character hexadecimal
   suffix. With randomization disabled, the ID is unchanged.
 
-On a prefix-cache hit, `num_computed_tokens_cpu` identifies the first token
-executed by the current forward; cached-prefix activations are absent. Final
-logits on the next-token-only path used for capture contain one row per active
-request in packed request order.
+On a prefix-cache hit, the runner-specific computed-token array identifies the
+first token executed by the current forward; cached-prefix activations are
+absent. Final logits on the next-token-only path used for capture contain one
+row per active request in packed request order.
+
+V2 owns GPU-only block-table rows through `StagedWriteTensor`, with block counts
+mirrored on the CPU. DMI's current `StepContext`, metadata schema, and hook
+shapes do not consume block IDs or block-table rows, so the integration does not
+copy or shadow block-table contents. A future field that depends on block IDs
+must add a CPU shadow at `BlockTables.append_block_ids`, validate it against
+the GPU-visible counts at emit time, and omit or degrade that field on a
+mismatch rather than emitting unverified data.
 
 ## Model input representation
 
@@ -61,21 +77,31 @@ request in packed request order.
 
 ## Dispatch and execution rows
 
-- `_determine_batch_execution_and_padding` returns the `CUDAGraphMode` and
+- V1 `_determine_batch_execution_and_padding` returns the `CUDAGraphMode` and
   `BatchDescriptor` used by the following forward.
-- `BatchDescriptor.num_tokens` is the execution-row count after padding and
-  is at least the real packed token-row count.
+- V2 `cudagraph_manager.dispatch` returns the
+  `BatchExecutionDescriptor` passed to `prepare_inputs` and the following
+  forward.
+- The runner-specific descriptor's `num_tokens` is the execution-row count
+  after padding and is at least the real packed token-row count.
 - Request order and execution-row count do not change between that boundary
   and model forward without a corresponding new descriptor.
 - The caller's eager request is preserved by dispatch.
 - Dispatcher decisions account for uniform decode, LoRA, encoder output,
   cascade attention, graph mode, and caller-eager conditions.
 
-PP+SP early dispatch may occur before `_prepare_inputs`; a later post-layout
-dispatch still supplies the descriptor used by model forward. Scheduler
-maxima bound scheduled tokens and active sequences, CUDA-graph capture sizes
-bound graph-padded rows, and SP padding rounds rows to the required TP
-multiple.
+When the V2 graph descriptor would exceed DMI ring capacity, the integration
+returns an eager `BatchExecutionDescriptor` with the real token and request
+counts before `prepare_inputs`. Real encoder/model-specific steps that vLLM has
+already made eager can bypass the graph manager; the integration validates
+their real descriptor during `prepare_inputs` and latches the same DMI eager
+behavior.
+
+On V1, PP+SP early dispatch may occur before `_prepare_inputs`; a later
+post-layout dispatch still supplies the descriptor used by model forward.
+Scheduler maxima bound scheduled tokens and active sequences, CUDA-graph
+capture sizes bound graph-padded rows, and SP padding rounds rows to the
+required TP multiple.
 
 ## Model resolution and construction
 

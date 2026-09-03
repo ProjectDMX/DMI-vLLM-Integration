@@ -13,11 +13,18 @@ that targets vLLM `0.27.1`. From that integration checkout, run:
 ```bash
 python -m pip install 'vllm==0.27.1'
 python -m pip install .
-export VLLM_USE_V2_MODEL_RUNNER=0
 ```
 
 The integration package is distributed from this source repository and its
 immutable tags; it is not published to PyPI or another package registry.
+
+Both vLLM 0.27.1 GPU model runners are supported. The V2 runner can be used
+through vLLM's normal architecture-dependent default, or selected explicitly
+with `VLLM_USE_V2_MODEL_RUNNER=1`; V1 remains supported with
+`VLLM_USE_V2_MODEL_RUNNER=0`. V2 speculative decoding is rejected before CUDA
+initialization because its computed-token accounting is not yet part of this
+contract. Other unsupported architectures and parallel modes are also rejected
+before model execution.
 
 ## Model support
 
@@ -97,3 +104,5 @@ If the server uses an API key, add
 
 The official-vLLM behavior assumed by this release is documented in
 [`docs/vllm_contract.md`](docs/vllm_contract.md).
+The V2 integration points, block-table decision, and qualification evidence are
+summarized in [`docs/v2_model_runner.md`](docs/v2_model_runner.md).

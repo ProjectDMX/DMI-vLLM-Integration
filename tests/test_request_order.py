@@ -21,6 +21,11 @@ from vllm.compilation.cuda_graph import CUDAGraphWrapper
 from vllm.config import CUDAGraphMode
 from vllm.forward_context import BatchDescriptor
 from vllm.v1.cudagraph_dispatcher import CudagraphDispatcher
+from vllm.v1.worker.gpu.cudagraph_utils import (
+    BatchExecutionDescriptor,
+    CudaGraphManager,
+)
+from vllm.v1.worker.gpu.model_runner import GPUModelRunner as GPUModelRunnerV2
 from vllm.v1.worker.gpu_model_runner import GPUModelRunner
 from vllm.v1.worker.gpu_worker import Worker
 
@@ -118,20 +123,22 @@ def test_worker_load_model_forwards_v027_keyword(monkeypatch):
     ]
 
 
-def test_v2_model_runner_fails_before_device_initialization(monkeypatch):
-    initialized = []
-    monkeypatch.setattr(
-        Worker,
-        "init_device",
-        lambda _self: initialized.append(True),
-    )
+def test_worker_config_allows_v2_generate_runner():
     worker = DMXGPUWorker.__new__(DMXGPUWorker)
     worker.use_v2_model_runner = True
+    worker.vllm_config = _worker_config_for_validation()
 
-    with pytest.raises(RuntimeError, match="VLLM_USE_V2_MODEL_RUNNER=0"):
-        worker.init_device()
+    worker._validate_dmi_config()
 
-    assert initialized == []
+
+def test_worker_config_rejects_v2_speculative_decoding():
+    worker = DMXGPUWorker.__new__(DMXGPUWorker)
+    worker.use_v2_model_runner = True
+    worker.vllm_config = _worker_config_for_validation("resid_pre")
+    worker.vllm_config.speculative_config = object()
+
+    with pytest.raises(RuntimeError, match="V2.*speculative"):
+        worker._validate_dmi_config()
 
 
 def _worker_config_for_validation(hook_selection="vllm-full"):
@@ -712,6 +719,46 @@ def test_records_real_packed_order_not_scheduler_order():
     assert adaptor._step_state.phase is VLLMStepPhase.LAYOUT_READY
 
 
+def test_v2_records_prepared_packed_order_and_cpu_counts():
+    scheduler_output = _scheduler()
+    adaptor = _armed_adaptor(scheduler_output)
+    input_batch = SimpleNamespace(
+        num_reqs=2,
+        req_ids=["B", "A"],
+        num_scheduled_tokens=np.array([3, 2], dtype=np.int32),
+        num_computed_tokens_np=np.array([7, 11], dtype=np.int32),
+        num_tokens=5,
+    )
+
+    adaptor._record_v2_real_layout(scheduler_output, input_batch)
+
+    layout = adaptor._step_state.layout
+    assert layout is not None
+    assert layout.raw_req_ids == ("B", "A")
+    assert layout.scheduled_counts == (3, 2)
+    assert layout.computed_counts == (7, 11)
+    assert layout.token_ranges == ((7, 10), (11, 13))
+    assert layout.dim0_offsets == (0, 3)
+    assert layout.total_rows == 5
+
+
+def test_runner_input_id_dtype_supports_v1_and_v2_buffers():
+    assert VLLMAdaptor._input_ids_dtype(
+        SimpleNamespace(
+            input_ids=SimpleNamespace(
+                gpu=torch.empty(0, dtype=torch.int64),
+            )
+        )
+    ) is torch.int64
+    assert VLLMAdaptor._input_ids_dtype(
+        SimpleNamespace(
+            input_buffers=SimpleNamespace(
+                input_ids=torch.empty(0, dtype=torch.int32),
+            )
+        )
+    ) is torch.int32
+
+
 @pytest.mark.parametrize(
     ("scheduler_output", "runner", "ordered_counts", "match"),
     [
@@ -1227,6 +1274,57 @@ def test_exact_preflight_capacity_boundary():
 
     assert _call_preflight(fit, runner) is False
     assert _call_preflight(over, runner2) is True
+
+
+def test_v2_preflight_uses_the_real_dispatch_descriptor():
+    candidate = BatchExecutionDescriptor(
+        cg_mode=CUDAGraphMode.FULL,
+        num_tokens=8,
+        num_reqs=4,
+        uniform_token_count=1,
+    )
+    fit = VLLMAdaptor.__new__(VLLMAdaptor)
+    fit._step_state = _VLLMStepState(phase=VLLMStepPhase.ARMED)
+    fit._byte_capacity = 128
+    fit._role_formulas = (
+        _VLLMRoleFormula(execution_terms=((16, 1),), hook_count=1),
+    )
+
+    assert fit._preflight_v2_force_eager(
+        candidate,
+        num_tokens=5,
+        num_reqs=2,
+    ) is False
+    assert fit._step_state.capacity_candidate == (
+        CUDAGraphMode.FULL,
+        candidate,
+    )
+
+    fit._byte_capacity = 127
+    assert fit._preflight_v2_force_eager(
+        candidate,
+        num_tokens=5,
+        num_reqs=2,
+    ) is True
+
+
+def test_v2_preflight_rejects_descriptor_shorter_than_real_batch():
+    adaptor = VLLMAdaptor.__new__(VLLMAdaptor)
+    adaptor._step_state = _VLLMStepState(phase=VLLMStepPhase.ARMED)
+    adaptor._byte_capacity = 128
+    adaptor._role_formulas = ()
+    candidate = BatchExecutionDescriptor(
+        cg_mode=CUDAGraphMode.FULL,
+        num_tokens=4,
+        num_reqs=2,
+    )
+
+    with pytest.raises(RuntimeError, match="fewer rows"):
+        adaptor._preflight_v2_force_eager(
+            candidate,
+            num_tokens=5,
+            num_reqs=2,
+        )
 
 
 def _real_dispatch_runner(mode):
@@ -1929,8 +2027,29 @@ class _FakeAdaptor:
         self._step_state.layout = object()
         self._step_state.phase = VLLMStepPhase.LAYOUT_READY
 
+    def _record_v2_real_layout(self, scheduler_output, input_batch):
+        self.events.append(
+            (
+                "v2-record",
+                scheduler_output,
+                tuple(input_batch.req_ids),
+                tuple(int(value) for value in input_batch.num_scheduled_tokens),
+                tuple(int(value) for value in input_batch.num_computed_tokens_np),
+            )
+        )
+        self._step_state.layout = object()
+        self._step_state.phase = VLLMStepPhase.LAYOUT_READY
+
     def _preflight_force_eager(self, _model_runner, **kwargs):
         self.events.append(("preflight", kwargs))
+        return self.preflight_eager
+
+    def _preflight_v2_force_eager(self, descriptor, **kwargs):
+        self.events.append(("v2-preflight", descriptor, kwargs))
+        self._step_state.capacity_candidate = (
+            descriptor.cg_mode,
+            descriptor,
+        )
         return self.preflight_eager
 
     def _commit_actual_dispatch(
@@ -2046,6 +2165,240 @@ def _determine_kwargs(force_eager=False):
         force_num_active_loras=0,
         num_encoder_reqs=0,
     )
+
+
+def _install_v2_worker_wrappers(*, preflight_eager=False):
+    events = []
+    scheduler_output = _scheduler()
+    input_batch = SimpleNamespace(
+        num_reqs=2,
+        req_ids=["B", "A"],
+        num_scheduled_tokens=np.array([3, 2], dtype=np.int32),
+        num_computed_tokens_np=np.array([7, 11], dtype=np.int32),
+        num_tokens=5,
+    )
+
+    def original_prepare(received, descriptor):
+        events.append(("v2-prepare", received, descriptor))
+        return input_batch
+
+    graph_candidate = BatchExecutionDescriptor(
+        cg_mode=CUDAGraphMode.FULL,
+        num_tokens=8,
+        num_reqs=4,
+        uniform_token_count=1,
+    )
+
+    def original_dispatch(
+        num_reqs,
+        num_tokens,
+        uniform_token_count,
+        num_active_loras,
+    ):
+        events.append(
+            (
+                "v2-dispatch",
+                num_reqs,
+                num_tokens,
+                uniform_token_count,
+                num_active_loras,
+            )
+        )
+        return graph_candidate
+
+    manager = SimpleNamespace(dispatch=original_dispatch)
+    runner = SimpleNamespace(
+        prepare_inputs=original_prepare,
+        cudagraph_manager=manager,
+    )
+    adaptor = _FakeAdaptor(events, preflight_eager)
+    worker = DMXGPUWorker.__new__(DMXGPUWorker)
+    worker.adaptor = adaptor
+    worker.model_runner = runner
+    worker._dmx_v2_dispatch_manager = None
+    worker._dmx_v2_original_dispatch = None
+    worker._install_v2_prepare_wrapper()
+    worker._ensure_v2_dispatch_wrapper()
+    return (
+        worker,
+        adaptor,
+        runner,
+        manager,
+        scheduler_output,
+        input_batch,
+        graph_candidate,
+        events,
+    )
+
+
+def test_v2_wrappers_commit_after_dispatch_and_real_prepare():
+    (
+        _worker,
+        adaptor,
+        runner,
+        manager,
+        scheduler_output,
+        input_batch,
+        graph_candidate,
+        events,
+    ) = _install_v2_worker_wrappers()
+    adaptor._step_state = _VLLMStepState(
+        phase=VLLMStepPhase.ARMED,
+        scheduler_output=scheduler_output,
+    )
+
+    descriptor = manager.dispatch(2, 5, 1, num_active_loras=0)
+    assert descriptor is graph_candidate
+    assert runner.prepare_inputs(scheduler_output, descriptor) is input_batch
+
+    assert [event[0] for event in events] == [
+        "v2-dispatch",
+        "v2-preflight",
+        "v2-prepare",
+        "v2-record",
+        "commit",
+    ]
+    assert adaptor._step_state.phase is VLLMStepPhase.COMMITTED
+    commit = events[-1]
+    assert commit[2] is CUDAGraphMode.FULL
+    assert commit[3] is graph_candidate
+    assert commit[4] is False
+
+
+def test_v2_dispatch_forces_eager_before_prepare_when_ring_requires_it():
+    (
+        _worker,
+        adaptor,
+        runner,
+        manager,
+        scheduler_output,
+        _input_batch,
+        _graph_candidate,
+        events,
+    ) = _install_v2_worker_wrappers(preflight_eager=True)
+    adaptor._step_state = _VLLMStepState(
+        phase=VLLMStepPhase.ARMED,
+        scheduler_output=scheduler_output,
+    )
+
+    descriptor = manager.dispatch(2, 5, 1, num_active_loras=0)
+    assert descriptor == BatchExecutionDescriptor(
+        cg_mode=CUDAGraphMode.NONE,
+        num_tokens=5,
+        num_reqs=2,
+        num_active_loras=0,
+    )
+    runner.prepare_inputs(scheduler_output, descriptor)
+
+    assert adaptor._step_state.force_eager_latch is True
+    commit = events[-1]
+    assert commit[2] is CUDAGraphMode.NONE
+    assert commit[3] is descriptor
+    assert commit[4] is True
+
+
+def test_v2_prepare_accepts_an_already_eager_dispatch_bypass():
+    (
+        _worker,
+        adaptor,
+        runner,
+        _manager,
+        scheduler_output,
+        input_batch,
+        _graph_candidate,
+        events,
+    ) = _install_v2_worker_wrappers(preflight_eager=True)
+    adaptor._step_state = _VLLMStepState(
+        phase=VLLMStepPhase.ARMED,
+        scheduler_output=scheduler_output,
+    )
+    eager = BatchExecutionDescriptor(
+        cg_mode=CUDAGraphMode.NONE,
+        num_tokens=5,
+        num_reqs=2,
+    )
+
+    assert runner.prepare_inputs(scheduler_output, eager) is input_batch
+
+    assert [event[0] for event in events] == [
+        "v2-prepare",
+        "v2-record",
+        "v2-preflight",
+        "commit",
+    ]
+    assert adaptor._step_state.force_eager_latch is True
+    assert events[-1][3] is eager
+    assert events[-1][4] is True
+
+
+def test_v2_wrappers_preserve_pinned_parameter_contract():
+    (
+        _worker,
+        _adaptor,
+        runner,
+        manager,
+        _scheduler_output,
+        _input_batch,
+        _graph_candidate,
+        _events,
+    ) = _install_v2_worker_wrappers()
+
+    wrapped_prepare = list(
+        inspect.signature(runner.prepare_inputs).parameters.values()
+    )
+    pinned_prepare = list(
+        inspect.signature(GPUModelRunnerV2.prepare_inputs).parameters.values()
+    )[1:]
+    wrapped_dispatch = list(
+        inspect.signature(manager.dispatch).parameters.values()
+    )
+    pinned_dispatch = list(
+        inspect.signature(CudaGraphManager.dispatch).parameters.values()
+    )[1:]
+
+    assert [
+        (parameter.name, parameter.kind, parameter.default)
+        for parameter in wrapped_prepare
+    ] == [
+        (parameter.name, parameter.kind, parameter.default)
+        for parameter in pinned_prepare
+    ]
+    assert [
+        (parameter.name, parameter.kind, parameter.default)
+        for parameter in wrapped_dispatch
+    ] == [
+        (parameter.name, parameter.kind, parameter.default)
+        for parameter in pinned_dispatch
+    ]
+
+
+def test_v2_wrappers_are_idle_passthrough_and_dispatch_restores():
+    (
+        worker,
+        adaptor,
+        runner,
+        manager,
+        scheduler_output,
+        input_batch,
+        graph_candidate,
+        events,
+    ) = _install_v2_worker_wrappers()
+    wrapped_dispatch = manager.dispatch
+
+    descriptor = manager.dispatch(2, 5, 1, num_active_loras=0)
+    assert descriptor is graph_candidate
+    assert runner.prepare_inputs(scheduler_output, descriptor) is input_batch
+    assert [event[0] for event in events] == [
+        "v2-dispatch",
+        "v2-prepare",
+    ]
+    assert adaptor._step_state.phase is VLLMStepPhase.IDLE
+
+    worker._restore_v2_dispatch_wrapper()
+    assert manager.dispatch is not wrapped_dispatch
+    events.clear()
+    assert manager.dispatch(2, 5, 1, 0) is graph_candidate
+    assert [event[0] for event in events] == ["v2-dispatch"]
 
 
 def test_wrappers_record_after_real_prepare_then_commit_real_dispatch(
