@@ -81,6 +81,9 @@ jobs:
           run_root="$RUNNER_TEMP/dmi-vllm-release-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           CUDA_VISIBLE_DEVICES=0 python -m tests.vllm_dmillm_runner --result-file "$run_root/dmillm.json"
           env -u VLLM_TARGET_DEVICE CUDA_VISIBLE_DEVICES=0,1 E2E_ARTIFACT_DIR="$run_root/qwen2-moe" bash tests/tools/run_qwen2_moe_vllm_pipeline.sh
+      - name: Validate isolated V2 output parity
+        run: |
+          CUDA_VISIBLE_DEVICES=0 python -m pytest -q -s tests_v2/test_v2_model_runner_e2e.py
       - name: Upload compact release evidence
         if: always()
         uses: actions/upload-artifact@v4
