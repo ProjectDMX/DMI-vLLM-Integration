@@ -18,6 +18,7 @@ def test_v1_selection_does_not_import_v2() -> None:
     probe = """
 import sys
 from types import SimpleNamespace
+import tests.conftest  # Install the opt-in hosted native contract stub.
 from dmi_vllm_integration.adapter import DMXGPUWorker as V1
 from dmi_vllm_integration.worker import DMXGPUWorker
 worker = DMXGPUWorker.__new__(

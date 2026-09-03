@@ -99,6 +99,12 @@ def _install_hosted_cpu_native_contract_stub() -> None:
         ThreadFailure=RuntimeError,
     )
     _native_engine._load_extension = lambda: native_stub
+    # DMI main splits native loading by capability: API-v1 configuration
+    # symbols use the host-only loader, while ring symbols retain the full
+    # loader.  DMI v1.1.0 only has ``_load_extension``, so assign the newer
+    # entry point conditionally to keep this CI shim cross-version.
+    if "_load_host_extension" in vars(_native_engine):
+        _native_engine._load_host_extension = lambda: native_stub
 
 
 _install_hosted_cpu_native_contract_stub()
