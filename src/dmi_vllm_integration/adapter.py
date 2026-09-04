@@ -74,6 +74,7 @@ from dmi_vllm_integration.dmi_api import (
     compute_hook_shape,
     configure_hook_padding_strip,
     hook_row_basis,
+    hook_belongs_to_layers,
     hook_belongs_to_pp_rank,
     hook_belongs_to_tp_rank,
     is_preset_registered,
@@ -268,8 +269,16 @@ class _VLLMHookSelection:
         parallel_config: Any,
         hf_config: Any,
         final_logits_dtype: Optional[torch.dtype] = None,
+        layers: Optional[Any] = None,
     ) -> "_VLLMHookSelection":
-        """Select local and model-wide rank-type hooks once at attachment."""
+        """Select local and model-wide rank-type hooks once at attachment.
+
+        ``layers`` is the optional inclusive ``LayerSelection`` forwarded by
+        DMI-configurator's ``attach_config``. It filters BOTH the local
+        specs and the model-wide candidate-rank sets, so the rank formulas
+        and the installed hooks always agree on which layers capture.
+        Global hooks (``layer_no < 0``) are never layer-restricted.
+        """
         hf_config = getattr(hf_config, "text_config", hf_config)
         tp_size = int(parallel_config.tensor_parallel_size)
         pp_size = int(parallel_config.pipeline_parallel_size)
@@ -327,6 +336,40 @@ class _VLLMHookSelection:
         selected_model_wide = select_hook_specs(
             model_wide_specs, hook_selection, cfg
         )
+
+        # One definition of "inside the range", applied to both the local
+        # specs (via the same helper the base attach path uses) and the
+        # model-wide candidate sets below.
+        if layers is not None:
+            in_range = [
+                spec
+                for spec in selected_model_wide
+                if spec.layer_no < 0
+                or hook_belongs_to_layers(spec, layers.start, layers.end)
+            ]
+            if not in_range:
+                from dmi.configuration.validation import SEVERITY_ERROR, Issue
+                from dmi.configuration.errors import ConfigValidationError
+
+                raise ConfigValidationError(
+                    [
+                        Issue(
+                            SEVERITY_ERROR,
+                            "observations.layers",
+                            f"The selected layer range {layers.start}-"
+                            f"{layers.end} matches no hook this "
+                            f"{num_layers}-layer model exposes, so every "
+                            "requested observation would be filtered out.",
+                        )
+                    ]
+                )
+            selected_model_wide = tuple(in_range)
+            local_hooks = tuple(
+                spec
+                for spec in local_hooks
+                if spec.layer_no < 0
+                or hook_belongs_to_layers(spec, layers.start, layers.end)
+            )
 
         from vllm.distributed.utils import get_pp_indices
 
@@ -658,8 +701,20 @@ class VLLMAdaptor(BackendAdaptor):
 
     # ----- gpu_padding_strip integration -----
 
-    def attach_model(self, model: Any, hook_selection: str = "full") -> None:
+    def attach_model(
+        self,
+        model: Any,
+        hook_selection: str = "full",
+        *,
+        layers: Optional[Any] = None,
+    ) -> None:
         """Standard attach, plus gpu_padding_strip pool setup when enabled.
+
+        ``layers`` is the optional inclusive ``LayerSelection`` from
+        DMI-configurator; it is applied to the installed local specs (via
+        the base attach path) AND to the model-wide candidate-rank formula
+        sets, which must see the same layers or their per-rank byte plans
+        disagree with what actually captures.
 
         When `gpu_padding_strip=True`, allocate one shared int64[1] device
         tensor (`_row_count_dev`) and one pinned-host counterpart.  For
@@ -671,7 +726,7 @@ class VLLMAdaptor(BackendAdaptor):
         call reads the freshly-written value and multiplies by its
         baked row_bytes.
         """
-        super().attach_model(model, hook_selection)
+        super().attach_model(model, hook_selection, layers=layers)
         head_dtype = self.vllm_config.model_config.head_dtype
         for spec in self.active_hook_specs:
             if spec.hook_type == HOOK_TYPE_FINAL_LOGITS:
@@ -731,6 +786,7 @@ class VLLMAdaptor(BackendAdaptor):
             parallel_config=self.vllm_config.parallel_config,
             hf_config=self.vllm_config.model_config.hf_config,
             final_logits_dtype=head_dtype,
+            layers=layers,
         )
         if not self.user_wants_null_mode:
             self._validate_moe_routing_capture(
