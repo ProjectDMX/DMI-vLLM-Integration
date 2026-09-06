@@ -268,8 +268,16 @@ class _VLLMHookSelection:
         parallel_config: Any,
         hf_config: Any,
         final_logits_dtype: Optional[torch.dtype] = None,
+        layers: Optional[Any] = None,
     ) -> "_VLLMHookSelection":
-        """Select local and model-wide rank-type hooks once at attachment."""
+        """Select local and model-wide rank-type hooks once at attachment.
+
+        ``layers`` is the optional inclusive ``LayerSelection`` forwarded by
+        DMI-configurator's ``attach_config``. It filters BOTH the local
+        specs and the model-wide candidate-rank sets, so the rank formulas
+        and the installed hooks always agree on which layers capture.
+        Global hooks (``layer_no < 0``) are never layer-restricted.
+        """
         hf_config = getattr(hf_config, "text_config", hf_config)
         tp_size = int(parallel_config.tensor_parallel_size)
         pp_size = int(parallel_config.pipeline_parallel_size)
@@ -327,6 +335,47 @@ class _VLLMHookSelection:
         selected_model_wide = select_hook_specs(
             model_wide_specs, hook_selection, cfg
         )
+
+        # One definition of "inside the range", applied to both the local
+        # specs (via the same helper the base attach path uses) and the
+        # model-wide candidate sets below. The layer-range API (dmi.api.v1
+        # exports, dmi.configuration types) arrived after DMI v1.1, so the
+        # imports live here -- not at module level -- keeping this module
+        # importable (and attachable without a range) on older DMI.
+        if layers is not None:
+            try:
+                from .dmi_api import hook_belongs_to_layers
+                from dmi.configuration.errors import ConfigValidationError
+                from dmi.configuration.validation import SEVERITY_ERROR, Issue
+            except ImportError as exc:
+                raise RuntimeError(
+                    "A layer range requires DMI with the v1 layer-range API "
+                    "(dmi.api.v1 exports hook_belongs_to_layers); upgrade DMI "
+                    "to a revision that includes it."
+                ) from exc
+
+            def in_range(spec) -> bool:
+                return (
+                    spec.layer_no < 0
+                    or hook_belongs_to_layers(spec, layers.start, layers.end)
+                )
+
+            selected = [spec for spec in selected_model_wide if in_range(spec)]
+            if not selected:
+                raise ConfigValidationError(
+                    [
+                        Issue(
+                            SEVERITY_ERROR,
+                            "observations.layers",
+                            f"The selected layer range {layers.start}-"
+                            f"{layers.end} matches no hook this "
+                            f"{num_layers}-layer model exposes, so every "
+                            "requested observation would be filtered out.",
+                        )
+                    ]
+                )
+            selected_model_wide = tuple(selected)
+            local_hooks = tuple(spec for spec in local_hooks if in_range(spec))
 
         from vllm.distributed.utils import get_pp_indices
 
@@ -658,8 +707,20 @@ class VLLMAdaptor(BackendAdaptor):
 
     # ----- gpu_padding_strip integration -----
 
-    def attach_model(self, model: Any, hook_selection: str = "full") -> None:
+    def attach_model(
+        self,
+        model: Any,
+        hook_selection: str = "full",
+        *,
+        layers: Optional[Any] = None,
+    ) -> None:
         """Standard attach, plus gpu_padding_strip pool setup when enabled.
+
+        ``layers`` is the optional inclusive ``LayerSelection`` from
+        DMI-configurator; it is applied to the installed local specs (via
+        the base attach path) AND to the model-wide candidate-rank formula
+        sets, which must see the same layers or their per-rank byte plans
+        disagree with what actually captures.
 
         When `gpu_padding_strip=True`, allocate one shared int64[1] device
         tensor (`_row_count_dev`) and one pinned-host counterpart.  For
@@ -671,7 +732,11 @@ class VLLMAdaptor(BackendAdaptor):
         call reads the freshly-written value and multiplies by its
         baked row_bytes.
         """
-        super().attach_model(model, hook_selection)
+        # Forward `layers` only when there is a range to apply: the base
+        # adapter on older DMI has no such keyword, and passing layers=None
+        # unconditionally would break every attach on those revisions.
+        attach_kwargs = {} if layers is None else {"layers": layers}
+        super().attach_model(model, hook_selection, **attach_kwargs)
         head_dtype = self.vllm_config.model_config.head_dtype
         for spec in self.active_hook_specs:
             if spec.hook_type == HOOK_TYPE_FINAL_LOGITS:
@@ -731,6 +796,7 @@ class VLLMAdaptor(BackendAdaptor):
             parallel_config=self.vllm_config.parallel_config,
             hf_config=self.vllm_config.model_config.hf_config,
             final_logits_dtype=head_dtype,
+            layers=layers,
         )
         if not self.user_wants_null_mode:
             self._validate_moe_routing_capture(
