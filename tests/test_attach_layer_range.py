@@ -74,8 +74,8 @@ def _install_fake_vllm() -> None:
 _install_fake_vllm()
 
 # The feature needs dmi.configuration (LayerSelection, error taxonomy),
-# which predates... actually postdates DMI v1.1: on the old-DMI CI matrix
-# this whole module skips instead of erroring.
+# which postdates DMI v1.1: on the old-DMI CI matrix this whole module skips
+# instead of erroring.
 pytest.importorskip("dmi.configuration.schema")
 
 from dmi_vllm_integration.adapter import VLLMAdaptor, _VLLMHookSelection  # noqa: E402
