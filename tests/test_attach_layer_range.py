@@ -69,6 +69,11 @@ def _install_fake_vllm() -> None:
 
 _install_fake_vllm()
 
+# The feature needs dmi.configuration (LayerSelection, error taxonomy),
+# which predates... actually postdates DMI v1.1: on the old-DMI CI matrix
+# this whole module skips instead of erroring.
+pytest.importorskip("dmi.configuration.schema")
+
 from dmi_vllm_integration.adapter import VLLMAdaptor, _VLLMHookSelection  # noqa: E402
 from dmi_vllm_integration.dmi_api import (  # noqa: E402
     HOOK_TYPE_RESID_PRE,
@@ -165,3 +170,73 @@ class TestLayerRangeFiltersBothSides:
 
         local_layers = {spec.layer_no for spec in selection.local_hooks}
         assert local_layers == {6, 7}
+
+
+class TestOldDMICompatibility:
+    """The CI matrix runs this repo against released DMI (v1.1.0) and DMI
+    main, neither of which has the layer-range facade names. The module must
+    import there, attach without a range must work, and a range must fail
+    with a clear error -- never an ImportError at import or a TypeError."""
+
+    def test_no_range_survives_a_facade_without_the_name(self, monkeypatch):
+        import dmi_vllm_integration.dmi_api as dmi_api
+
+        real_getattr = dmi_api.__getattr__
+
+        def old_dmi_getattr(name):
+            if name == "hook_belongs_to_layers":
+                raise AttributeError(name)
+            return real_getattr(name)
+
+        monkeypatch.setattr(dmi_api, "__getattr__", old_dmi_getattr)
+        selection = _select()
+
+        assert {spec.layer_no for spec in selection.local_hooks} == set(range(8))
+
+    def test_range_on_old_dmi_is_a_clear_upgrade_error(self, monkeypatch):
+        import dmi_vllm_integration.dmi_api as dmi_api
+        from dmi.configuration.schema import LayerSelection
+
+        real_getattr = dmi_api.__getattr__
+
+        def old_dmi_getattr(name):
+            if name == "hook_belongs_to_layers":
+                raise AttributeError(name)
+            return real_getattr(name)
+
+        monkeypatch.setattr(dmi_api, "__getattr__", old_dmi_getattr)
+        with pytest.raises(RuntimeError, match="upgrade DMI"):
+            _select(layers=LayerSelection(2, 5))
+
+    def test_attach_forwards_layers_only_when_set(self, monkeypatch):
+        """Unconditional layers=None broke every attach on old DMI bases
+        (TypeError: unexpected keyword). The base receives the keyword only
+        when a range is configured."""
+        import dmi_vllm_integration.adapter as adapter_module
+        from dmi.configuration.schema import LayerSelection
+        from dmi_vllm_integration.dmi_api import BackendAdaptor
+
+        recorded: list = []
+
+        class _StopAfterSuper(Exception):
+            pass
+
+        def recording_attach(self, model, hook_selection="full", **kwargs):
+            recorded.append(kwargs)
+            raise _StopAfterSuper()
+
+        monkeypatch.setattr(BackendAdaptor, "attach_model", recording_attach)
+
+        engine = SimpleNamespace(_ring_transport=object())
+        adapter = VLLMAdaptor(
+            engine, "test-model", SimpleNamespace(), gpu_padding_strip=False
+        )
+        model = SimpleNamespace()
+
+        with pytest.raises(_StopAfterSuper):
+            adapter.attach_model(model, "full")
+        assert recorded == [{}], "no range: base must not see the keyword"
+
+        with pytest.raises(_StopAfterSuper):
+            adapter.attach_model(model, "full", layers=LayerSelection(1, 3))
+        assert recorded[1] == {"layers": LayerSelection(1, 3)}

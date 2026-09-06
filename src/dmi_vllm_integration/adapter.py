@@ -74,7 +74,6 @@ from dmi_vllm_integration.dmi_api import (
     compute_hook_shape,
     configure_hook_padding_strip,
     hook_row_basis,
-    hook_belongs_to_layers,
     hook_belongs_to_pp_rank,
     hook_belongs_to_tp_rank,
     is_preset_registered,
@@ -339,18 +338,30 @@ class _VLLMHookSelection:
 
         # One definition of "inside the range", applied to both the local
         # specs (via the same helper the base attach path uses) and the
-        # model-wide candidate sets below.
+        # model-wide candidate sets below. The layer-range API (dmi.api.v1
+        # exports, dmi.configuration types) arrived after DMI v1.1, so the
+        # imports live here -- not at module level -- keeping this module
+        # importable (and attachable without a range) on older DMI.
         if layers is not None:
-            in_range = [
-                spec
-                for spec in selected_model_wide
-                if spec.layer_no < 0
-                or hook_belongs_to_layers(spec, layers.start, layers.end)
-            ]
-            if not in_range:
-                from dmi.configuration.validation import SEVERITY_ERROR, Issue
+            try:
+                from .dmi_api import hook_belongs_to_layers
                 from dmi.configuration.errors import ConfigValidationError
+                from dmi.configuration.validation import SEVERITY_ERROR, Issue
+            except ImportError as exc:
+                raise RuntimeError(
+                    "A layer range requires DMI with the v1 layer-range API "
+                    "(dmi.api.v1 exports hook_belongs_to_layers); upgrade DMI "
+                    "to a revision that includes it."
+                ) from exc
 
+            def in_range(spec) -> bool:
+                return (
+                    spec.layer_no < 0
+                    or hook_belongs_to_layers(spec, layers.start, layers.end)
+                )
+
+            selected = [spec for spec in selected_model_wide if in_range(spec)]
+            if not selected:
                 raise ConfigValidationError(
                     [
                         Issue(
@@ -363,13 +374,8 @@ class _VLLMHookSelection:
                         )
                     ]
                 )
-            selected_model_wide = tuple(in_range)
-            local_hooks = tuple(
-                spec
-                for spec in local_hooks
-                if spec.layer_no < 0
-                or hook_belongs_to_layers(spec, layers.start, layers.end)
-            )
+            selected_model_wide = tuple(selected)
+            local_hooks = tuple(spec for spec in local_hooks if in_range(spec))
 
         from vllm.distributed.utils import get_pp_indices
 
@@ -726,7 +732,11 @@ class VLLMAdaptor(BackendAdaptor):
         call reads the freshly-written value and multiplies by its
         baked row_bytes.
         """
-        super().attach_model(model, hook_selection, layers=layers)
+        # Forward `layers` only when there is a range to apply: the base
+        # adapter on older DMI has no such keyword, and passing layers=None
+        # unconditionally would break every attach on those revisions.
+        attach_kwargs = {} if layers is None else {"layers": layers}
+        super().attach_model(model, hook_selection, **attach_kwargs)
         head_dtype = self.vllm_config.model_config.head_dtype
         for spec in self.active_hook_specs:
             if spec.hook_type == HOOK_TYPE_FINAL_LOGITS:
