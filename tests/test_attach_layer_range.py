@@ -9,6 +9,7 @@ filtered local specs can never disagree about which layers capture.
 """
 from __future__ import annotations
 
+import importlib.util
 import sys
 from types import ModuleType, SimpleNamespace
 
@@ -16,10 +17,13 @@ import pytest
 
 
 def _install_fake_vllm() -> None:
-    """The adapter imports vLLM at module load; a stub keeps this suite
-    runnable where vLLM is not installed (CPU CI). ``get_pp_indices`` is the
-    only vllm symbol the code under test actually executes."""
-    if "vllm" in sys.modules and hasattr(sys.modules["vllm"], "distributed"):
+    """Stub vLLM only where vLLM is not installed (CPU CI); the adapter
+    imports vLLM at module load. When the real vLLM is installed it must
+    win even before it is imported -- a stub would shadow it for the whole
+    test session and break tests that expect the real module (test-order
+    dependent). ``get_pp_indices`` is the only vllm symbol the code under
+    test actually executes."""
+    if importlib.util.find_spec("vllm") is not None:
         return
 
     def get_pp_indices(num_layers, pp_rank, pp_size):
