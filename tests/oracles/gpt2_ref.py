@@ -19,7 +19,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Adapted from vllm/model_executor/models/gpt2.py in official vLLM 0.27.1.
+# Adapted from vllm/model_executor/models/gpt2.py in official vLLM 0.29.0.
 # Reference GPT-2 model for identical check.
 # Copy of gpt2.py with # BENCH_OFF D2D capture lines.
 # No HookPoints.  Buffer allocation reads REF_CONFIG env.
@@ -58,6 +58,7 @@ from vllm.sequence import IntermediateTensors
 from vllm.model_executor.models.interfaces import SupportsPP
 from vllm.model_executor.models.utils import (
     AutoWeightsLoader,
+    WeightsMapper,
     make_empty_intermediate_tensors_factory,
     make_layers,
     maybe_prefix,
@@ -171,6 +172,10 @@ class GPT2Block(nn.Module):
 
 @support_torch_compile
 class GPT2Model(nn.Module):
+    hf_to_vllm_mapper = WeightsMapper(
+        orig_to_new_substr={".attn.bias": None, ".attn.masked_bias": None}
+    )
+
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
         super().__init__()
         config = vllm_config.model_config.hf_config
@@ -231,10 +236,10 @@ class GPT2Model(nn.Module):
             yield name, loaded_weight
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
-        loader = AutoWeightsLoader(
-            self, skip_substrs=[".attn.bias", ".attn.masked_bias"]
+        loader = AutoWeightsLoader(self)
+        return loader.load_weights(
+            self._transpose_conv1d(weights), mapper=self.hf_to_vllm_mapper
         )
-        return loader.load_weights(self._transpose_conv1d(weights))
 
 
 class GPT2RefLMHeadModel(nn.Module, SupportsPP):

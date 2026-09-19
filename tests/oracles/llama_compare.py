@@ -23,7 +23,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Adapted from vllm/model_executor/models/llama.py in official vLLM 0.27.1.
+# Adapted from vllm/model_executor/models/llama.py in official vLLM 0.29.0.
 # Llama compare model for transport correctness testing.
 # Copy of llama_p.py with .copy_() capture into pre-allocated buffers
 # added after each HookPoint, so a single compiled graph fires both the
@@ -643,10 +643,7 @@ class LlamaCompareForCausalLM(
         return bufs
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
-        loader = AutoWeightsLoader(
-            self,
-            skip_prefixes=(["lm_head."] if self.config.tie_word_embeddings else None),
-        )
+        loader = AutoWeightsLoader(self)
         return loader.load_weights(weights, mapper=self.hf_to_vllm_mapper)
 
     def _get_layer_hook_specs(self, layer_no: int, layer) -> list[HookSpec]:

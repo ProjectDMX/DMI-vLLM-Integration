@@ -23,7 +23,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Adapted from vllm/model_executor/models/llama.py in official vLLM 0.27.1.
+# Adapted from vllm/model_executor/models/llama.py in official vLLM 0.29.0.
 # Reference Llama model for identical check.
 # Copy of llama.py with # BENCH_OFF D2D capture lines.
 # No HookPoints. Buffer allocation reads REF_CONFIG env.
@@ -607,8 +607,5 @@ class LlamaRefForCausalLM(
         return logits
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
-        loader = AutoWeightsLoader(
-            self,
-            skip_prefixes=(["lm_head."] if self.config.tie_word_embeddings else None),
-        )
+        loader = AutoWeightsLoader(self)
         return loader.load_weights(weights, mapper=self.hf_to_vllm_mapper)

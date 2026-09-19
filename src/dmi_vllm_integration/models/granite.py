@@ -23,7 +23,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Adapted from vllm/model_executor/models/granite.py in official vLLM 0.27.1.
+# Adapted from vllm/model_executor/models/granite.py in official vLLM 0.29.0.
 """IBM Granite dense decoder with DMI observation hooks."""
 
 from __future__ import annotations
@@ -110,7 +110,8 @@ class GranitePAttention(GraniteAttention):
             self.hook_k(k.unflatten(-1, (self.num_kv_heads, self.head_dim)))
         if self.hook_v.enabled:
             self.hook_v(v.unflatten(-1, (self.num_kv_heads, self.head_dim)))
-        q, k = self.rotary_emb(positions, q, k)
+        if self.use_rope:
+            q, k = self.rotary_emb(positions, q, k)
         attn_output = self.attn(q, k, v)
         if self.hook_z.enabled:
             self.hook_z(attn_output)

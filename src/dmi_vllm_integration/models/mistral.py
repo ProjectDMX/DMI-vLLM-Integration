@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
-# Adapted from vllm/model_executor/models/mistral.py in official vLLM 0.27.1.
+# Adapted from vllm/model_executor/models/mistral.py in official vLLM 0.29.0.
 """Bounded Mistral variant using DMI's hooked Llama implementation."""
 
 from collections.abc import Iterable
@@ -44,12 +44,7 @@ class MistralPForCausalLM(LlamaPForCausalLM):
     def load_weights(
         self, weights: Iterable[tuple[str, torch.Tensor]]
     ) -> set[str]:
-        loader = AutoWeightsLoader(
-            self,
-            skip_prefixes=(
-                ["lm_head."] if self.config.tie_word_embeddings else None
-            ),
-        )
+        loader = AutoWeightsLoader(self)
         return loader.load_weights(
             self.maybe_remap_mistral(name, loaded_weight)
             for name, loaded_weight in weights

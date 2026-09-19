@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-# Adapted from vllm/model_executor/models/qwen3.py in official vLLM 0.27.1.
+# Adapted from vllm/model_executor/models/qwen3.py in official vLLM 0.29.0.
 
 # Copyright 2024 The Qwen team.
 # Copyright 2023 The vLLM team.
@@ -460,10 +460,7 @@ class Qwen3PForCausalLM(
         return logits
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
-        loader = AutoWeightsLoader(
-            self,
-            skip_prefixes=(["lm_head."] if self.config.tie_word_embeddings else None),
-        )
+        loader = AutoWeightsLoader(self)
         return loader.load_weights(weights)
 
     def _get_layer_hook_specs(self, layer_no: int, layer) -> list[HookSpec]:

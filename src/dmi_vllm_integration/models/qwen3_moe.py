@@ -22,7 +22,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Adapted from vllm/model_executor/models/qwen3_moe.py in official vLLM 0.27.1.
+# Adapted from vllm/model_executor/models/qwen3_moe.py in official vLLM 0.29.0.
 """Qwen3-MoE decoder with DMI observation hooks."""
 
 from __future__ import annotations
@@ -165,7 +165,7 @@ class Qwen3MoePSparseMoeBlock(Qwen3MoeSparseMoeBlock):
         topk_weights: torch.Tensor,
         topk_ids: torch.Tensor,
     ) -> None:
-        if self.experts.is_internal_router and self.hook_router_logits.enabled:
+        if self.hook_router_logits.enabled:
             self.hook_router_logits(router_logits)
             _capture_compare_buffer(self, "router_logits", router_logits)
         topk_ids = topk_ids.to(torch.int32)
@@ -196,17 +196,9 @@ class Qwen3MoePSparseMoeBlock(Qwen3MoeSparseMoeBlock):
         if self.is_sequence_parallel:
             hidden_states = sequence_parallel_chunk(hidden_states)
 
-        if self.experts.is_internal_router:
-            experts_router_input = hidden_states
-        else:
-            router_logits, _ = self.gate(hidden_states)
-            if self.hook_router_logits.enabled:
-                self.hook_router_logits(router_logits)
-                _capture_compare_buffer(self, "router_logits", router_logits)
-            experts_router_input = router_logits
         final_hidden_states = self.experts(
             hidden_states=hidden_states,
-            router_logits=experts_router_input,
+            router_logits=hidden_states,
         )
         if self.is_sequence_parallel:
             final_hidden_states = tensor_model_parallel_all_gather(
