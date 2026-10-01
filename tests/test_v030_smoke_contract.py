@@ -5,8 +5,8 @@ from copy import deepcopy
 import pytest
 import torch
 
-from tests.v029_smoke import compare, require_multiprocess_engine
-from tests.v029_residual_reference import compare_residual_rows, old_residual_expression
+from tests.v030_smoke import compare, require_multiprocess_engine
+from tests.v030_residual_reference import compare_residual_rows, old_residual_expression
 
 
 @pytest.mark.parametrize("fault", [
@@ -18,7 +18,7 @@ def test_smoke_comparator_rejects_false_green(tmp_path, fault):
         "public": [{"request_id": "A", "token_ids": [1, 2], "finish_reason": "length"}],
         "runner": ["vllm.v1.worker.gpu.model_runner"],
         "configuration": {"custom_ops": ["none"], "max_tokens": 8},
-        "versions": {"vllm": "0.29.0"},
+        "versions": {"vllm": "0.30.0"},
         "logits": [torch.tensor([[1.0, 2.0]], dtype=torch.bfloat16)],
         "storage_rows": 0,
     }
@@ -104,10 +104,10 @@ def test_release_wrapper_library_path_is_opt_in(tmp_path, clear_path):
     fake_python.chmod(0o700)
     log = tmp_path / "environment.log"
     env = dict(os.environ, LD_LIBRARY_PATH="/example/required-cuda-library",
-               DMI_V029_CLEAR_LD_LIBRARY_PATH="1" if clear_path else "0",
-               DMI_V029_PYTHON=str(fake_python), DMI_V029_ARTIFACT_ROOT=str(tmp_path),
+               DMI_V030_CLEAR_LD_LIBRARY_PATH="1" if clear_path else "0",
+               DMI_V030_PYTHON=str(fake_python), DMI_V030_ARTIFACT_ROOT=str(tmp_path),
                TEST_ENV_LOG=str(log))
-    subprocess.run(["bash", "tests/run_v029_smoke.sh"],
+    subprocess.run(["bash", "tests/run_v030_smoke.sh"],
                    cwd=Path(__file__).parents[1], env=env,
                    capture_output=True, text=True, timeout=20, check=True)
     observed = log.read_text().splitlines()

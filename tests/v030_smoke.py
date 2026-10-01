@@ -1,4 +1,4 @@
-"""Bounded stock/monitored workload for official vLLM 0.29.0.
+"""Bounded stock/monitored workload for official vLLM 0.30.0.
 
 Run stock and monitored in separate processes, then compare the saved results.
 Requires a GPU, real model weights, DMI native built for this PyTorch, and
@@ -28,7 +28,7 @@ def compare(stock_path: Path, monitored_path: Path) -> None:
     assert monitored["storage_rows"] > 0, "no persisted DMI evidence"
     residual_rows = 0
     if stock.get("residuals") is not None or monitored.get("residuals") is not None:
-        from tests.v029_residual_reference import compare_residual_rows
+        from tests.v030_residual_reference import compare_residual_rows
         residual_rows = compare_residual_rows(stock["residuals"], monitored["residuals"])
     print(json.dumps({"status": "passed", "requests": len(stock["public"]),
                       "logit_steps": len(stock["logits"]),
@@ -109,14 +109,14 @@ def check_storage(client, model_id: str, outputs, config, hooks: str,
         if "token_ids" in selected:
             assert max(r.end_token_idx for r in tokens) == expected_end
     if residual_reference is not None:
-        from tests.v029_residual_reference import compare_residual_rows
+        from tests.v030_residual_reference import compare_residual_rows
         compare_residual_rows(residual_reference, stored_residuals)
     return len(rows)
 
 
 def require_multiprocess_engine():
     if os.environ.get("VLLM_ENABLE_V1_MULTIPROCESSING", "1") == "0":
-        raise RuntimeError("v029 smoke requires VLLM_ENABLE_V1_MULTIPROCESSING=1: "
+        raise RuntimeError("v030 smoke requires VLLM_ENABLE_V1_MULTIPROCESSING=1: "
                            "pause_scheduler('wait') is an EngineCoreProc-only barrier")
 
 
@@ -133,6 +133,8 @@ def main() -> None:
                         help="independent old-expression oracle; V1 eager only")
     parser.add_argument("--hooks", default="resid_pre,final_ln,token_ids,final_logits")
     parser.add_argument("--custom-ops", choices=["all", "none"])
+    parser.add_argument("--kv-cache-memory-bytes", type=int,
+                        help="fixed KV budget for shared GPUs; apply equally to both runs")
     parser.add_argument("--model-id", help="stable ID for AOT-cache replay tests")
     parser.add_argument("--request-offset", type=int, default=0,
                         help="fresh request IDs when reusing a model ID; use equally in both runs")
@@ -161,9 +163,9 @@ def main() -> None:
     from uuid import uuid4
     from vllm import LLM, SamplingParams
 
-    assert version("vllm") == "0.29.0"
+    assert version("vllm") == "0.30.0"
     assert torch.cuda.is_available()
-    model_id = args.model_id or f"dmi-v029-smoke-{uuid4().hex}"
+    model_id = args.model_id or f"dmi-v030-smoke-{uuid4().hex}"
     os.environ["DMI_SMOKE_LOGITS_PATH"] = str(args.output.with_suffix(".logits.pt").resolve())
     if args.residual_reference:
         os.environ["DMI_SMOKE_RESIDUALS_PATH"] = str(args.output.with_suffix(".residuals.pt").resolve())
@@ -173,11 +175,15 @@ def main() -> None:
                   max_model_len=256, max_num_seqs=4, max_num_batched_tokens=64,
                   enable_prefix_caching=False, gpu_memory_utilization=0.35,
                   enforce_eager=not args.graph,
-                  worker_cls=f"tests.v029_smoke_workers.{args.mode.title()}{args.runner.upper()}Worker")
+                  worker_cls=f"tests.v030_smoke_workers.{args.mode.title()}{args.runner.upper()}Worker")
     if args.graph:
         kwargs["compilation_config"] = {"cudagraph_capture_sizes": [1, 2, 3, 4]}
     if args.custom_ops:
         kwargs.setdefault("compilation_config", {})["custom_ops"] = [args.custom_ops]
+    if args.kv_cache_memory_bytes is not None:
+        if args.kv_cache_memory_bytes <= 0:
+            parser.error("--kv-cache-memory-bytes must be positive")
+        kwargs["kv_cache_memory_bytes"] = args.kv_cache_memory_bytes
     if args.mode == "monitored":
         kwargs["additional_config"] = {
             "dmx_model_id": model_id,
@@ -197,6 +203,7 @@ def main() -> None:
         "max_model_len": 256, "max_num_seqs": 4, "max_num_batched_tokens": 64,
         "seed": 42, "temperature": 0, "max_tokens": 8,
         "enable_prefix_caching": False, "tp": 1, "pp": 1,
+        "kv_cache_memory_bytes": resolved.cache_config.kv_cache_memory_bytes,
     }
     runner = llm.collective_rpc("smoke_describe_runner")
     expected_module = "vllm.v1.worker.gpu.model_runner" if args.runner == "v2" else "vllm.v1.worker.gpu_model_runner"

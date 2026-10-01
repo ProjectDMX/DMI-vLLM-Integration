@@ -34,7 +34,7 @@ class _LogitTap:
         if self._smoke_residual_enabled:
             assert self.vllm_config.model_config.enforce_eager
             assert type(self.model_runner).__module__ == "vllm.v1.worker.gpu_model_runner"
-            from tests.v029_residual_reference import old_residual_expression
+            from tests.v030_residual_reference import old_residual_expression
 
             def observe(name, layer):
                 def before_norm(_module, inputs):

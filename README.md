@@ -1,18 +1,18 @@
 # DMI vLLM integration
 
 `DMI-vLLM-Integration` connects DMI to an unmodified official vLLM
-installation. This **unreleased 0.29.0 port** targets exactly vLLM `0.29.0` and requires
+installation. This **unreleased 0.30.0 port** targets exactly vLLM `0.30.0` and requires
 DMI integration API v1, first released with DMI `1.1.0`.
 
 Choose a [DMI release tag](https://github.com/ProjectDMX/DMI/tags) in the
 range `>=v1.1.0,<v2.0.0`, then follow the `docs/install.md` shipped in that
 checkout, including its native-backend build. This port was tested with DMI
 `c222f18c4db55f6f2d7136b1d6608c0b540b273a` (API v1). Build the native backend
-against the **same PyTorch/CUDA as vLLM 0.29.0**, not a 0.27 environment.
+against the **same PyTorch/CUDA as vLLM 0.30.0**, not a 0.27 environment.
 From this integration checkout (or a version-matched release tag), run:
 
 ```bash
-python -m pip install 'vllm==0.29.0'
+python -m pip install 'vllm==0.30.0'
 python -m pip install .
 ```
 
@@ -20,7 +20,10 @@ The integration package is distributed from this source repository and its
 immutable tags; it is not published to PyPI or another package registry.
 
 Both V1 and V2 adapters are ported. Local GPU qualification is bounded to
-Qwen3-0.6B, BF16, TP1; see the [0.29 audit and evidence](docs/v029-port.md).
+Qwen3-0.6B, BF16, TP1; see the [0.30 audit and evidence](docs/v030-port.md).
+**Default compiled/graph qualification is currently blocked:** V1 and V2 differ
+from stock in raw logits and generated tokens. Do not treat this port as a
+qualified default-configuration release.
 The V2 runner can be used through vLLM's normal default, or selected explicitly
 with `VLLM_USE_V2_MODEL_RUNNER=1`; V1 remains supported with
 `VLLM_USE_V2_MODEL_RUNNER=0`. V2 speculative decoding is rejected before CUDA
@@ -28,10 +31,9 @@ initialization because its computed-token accounting is not yet part of this
 contract. Other unsupported architectures and parallel modes are also rejected
 before model execution.
 
-The bounded Qwen3 cell passes both eager and default compilation/CUDA graphs,
-including V2 AOT-cache reload. Use a **fresh version-specific**
+The bounded V1 and V2 eager cells pass. Use a **fresh version-specific**
 `VLLM_CACHE_ROOT` when migrating; old shared compilation artifacts are not a
-valid baseline. Eager mode is optional, not a V2 requirement.
+valid baseline. The compiled failure occurred even with fresh caches.
 V2 batch-sharded sampling is rejected when `final_logits` capture is selected.
 
 The public `dmi_vllm_integration.worker.DMXGPUWorker` entry point imports and
@@ -46,7 +48,7 @@ the dynamic entry point.
 ## Model support
 
 The following model families have importable implementations in this source
-tree. **Only Qwen3-0.6B has local 0.29 GPU evidence**; earlier version results
+tree. **Only Qwen3-0.6B has local 0.30 GPU evidence**; earlier version results
 are not carried forward. Other entries are candidate coverage, not a claim that
 their checkpoints, quantizations, multimodal inputs or distributed modes work:
 
@@ -89,6 +91,7 @@ from vllm import LLM, SamplingParams
 
 llm = LLM(
     model="Qwen/Qwen3-0.6B",
+    enforce_eager=True,  # Default compiled/graph transparency is not qualified.
     worker_cls="dmi_vllm_integration.worker.DMXGPUWorker",
     additional_config={"dmx_hook_selection": "resid_pre,final_ln,token_ids,final_logits"},
 )

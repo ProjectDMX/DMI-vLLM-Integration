@@ -1,0 +1,217 @@
+{
+  "date": "2026-10-01",
+  "integration_base": "c17b9f2e69b4f330a617896f759313eb331cb6dd",
+  "upstream_tag": "v0.30.0",
+  "upstream_commit": "ced6857afa0ea7b2e3f0846a62e1394e90f15607",
+  "core_commit": "c222f18c4db55f6f2d7136b1d6608c0b540b273a",
+  "gpu": "RTX 4090 / sm_89 / TP1 / PP1",
+  "checkpoint_revision": "c1899de289a04d12100db370d81485cdf75e47ca",
+  "release_gate": "blocked: compiled stock/monitored numerical mismatch",
+  "cells": [
+    {
+      "cell": "v1-eager",
+      "status": "pass",
+      "versions": {
+        "vllm": "0.30.0",
+        "torch": "2.13.0",
+        "DMI": "1.2.0",
+        "DMI-vLLM-Integration": "0.30.0"
+      },
+      "configuration": {
+        "model": "/data2/yibo/home_cache/huggingface/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca",
+        "dtype": "torch.bfloat16",
+        "enforce_eager": true,
+        "custom_ops": [
+          "all"
+        ],
+        "compile_mode": 0,
+        "graph_mode": "NONE",
+        "max_model_len": 256,
+        "max_num_seqs": 4,
+        "max_num_batched_tokens": 64,
+        "seed": 42,
+        "temperature": 0,
+        "max_tokens": 8,
+        "enable_prefix_caching": false,
+        "tp": 1,
+        "pp": 1
+      },
+      "public_equal": true,
+      "raw_logits_equal": true,
+      "logit_steps": 8,
+      "first_step_max_abs_diff": 0,
+      "storage_rows": 744,
+      "artifact_directory": "/tmp/v030-smoke.iJQC6i",
+      "sha256": {
+        "v1-eager-stock.pt": "d765bb69f8bb76588d5c728c1b802ba545c6340715dcafff9ec887b22990c3b3",
+        "v1-eager-monitored.pt": "3f2b1f121d7485541631904ae13085afcb88c8f54c8230bd597961f441bcc42d"
+      }
+    },
+    {
+      "cell": "v1-graph",
+      "status": "fail",
+      "versions": {
+        "vllm": "0.30.0",
+        "torch": "2.13.0",
+        "DMI": "1.2.0",
+        "DMI-vLLM-Integration": "0.30.0"
+      },
+      "configuration": {
+        "model": "/data2/yibo/home_cache/huggingface/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca",
+        "dtype": "torch.bfloat16",
+        "enforce_eager": false,
+        "custom_ops": [
+          "none"
+        ],
+        "compile_mode": 3,
+        "graph_mode": "FULL_AND_PIECEWISE",
+        "max_model_len": 256,
+        "max_num_seqs": 4,
+        "max_num_batched_tokens": 64,
+        "seed": 42,
+        "temperature": 0,
+        "max_tokens": 8,
+        "enable_prefix_caching": false,
+        "tp": 1,
+        "pp": 1
+      },
+      "public_equal": false,
+      "raw_logits_equal": false,
+      "logit_steps": 8,
+      "first_step_max_abs_diff": 0.1875,
+      "storage_rows": 744,
+      "artifact_directory": "/tmp/v030-smoke.iJQC6i",
+      "sha256": {
+        "v1-graph-stock.pt": "485e533757be1e9980216ca824a0bfb8cfe4fdf8c4403083243e9868fa43d7aa",
+        "v1-graph-monitored.pt": "15e85c05d19165261cffcd6a508a538509e21747f40c32ae5f0f3b5954ea14dd"
+      }
+    },
+    {
+      "cell": "v2-eager",
+      "status": "pass",
+      "versions": {
+        "vllm": "0.30.0",
+        "torch": "2.13.0",
+        "DMI": "1.2.0",
+        "DMI-vLLM-Integration": "0.30.0"
+      },
+      "configuration": {
+        "model": "/data2/yibo/home_cache/huggingface/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca",
+        "dtype": "torch.bfloat16",
+        "enforce_eager": true,
+        "custom_ops": [
+          "all"
+        ],
+        "compile_mode": 0,
+        "graph_mode": "NONE",
+        "max_model_len": 256,
+        "max_num_seqs": 4,
+        "max_num_batched_tokens": 64,
+        "seed": 42,
+        "temperature": 0,
+        "max_tokens": 8,
+        "enable_prefix_caching": false,
+        "tp": 1,
+        "pp": 1,
+        "kv_cache_memory_bytes": 1073741824
+      },
+      "public_equal": true,
+      "raw_logits_equal": true,
+      "logit_steps": 8,
+      "first_step_max_abs_diff": 0,
+      "storage_rows": 744,
+      "artifact_directory": "/tmp/v030-fixed-kv.H3m2W0",
+      "sha256": {
+        "v2-eager-stock.pt": "3686dd132421feb80fa20fa2fae9b49d333f96bd7be86ea78285addbe94e87c7",
+        "v2-eager-monitored.pt": "4199cbd09a3138a2b39a9b1e2f4d6aeed217bc7f3eb3346f8c7e6ca70038a1b1"
+      }
+    },
+    {
+      "cell": "v2-graph",
+      "status": "fail",
+      "versions": {
+        "vllm": "0.30.0",
+        "torch": "2.13.0",
+        "DMI": "1.2.0",
+        "DMI-vLLM-Integration": "0.30.0"
+      },
+      "configuration": {
+        "model": "/data2/yibo/home_cache/huggingface/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca",
+        "dtype": "torch.bfloat16",
+        "enforce_eager": false,
+        "custom_ops": [
+          "none"
+        ],
+        "compile_mode": 3,
+        "graph_mode": "FULL_AND_PIECEWISE",
+        "max_model_len": 256,
+        "max_num_seqs": 4,
+        "max_num_batched_tokens": 64,
+        "seed": 42,
+        "temperature": 0,
+        "max_tokens": 8,
+        "enable_prefix_caching": false,
+        "tp": 1,
+        "pp": 1,
+        "kv_cache_memory_bytes": 1073741824
+      },
+      "public_equal": false,
+      "raw_logits_equal": false,
+      "logit_steps": 8,
+      "first_step_max_abs_diff": 0.1875,
+      "storage_rows": 744,
+      "artifact_directory": "/tmp/v030-fixed-kv.H3m2W0",
+      "sha256": {
+        "v2-graph-stock.pt": "2aa17118b40dfb3c2f1526c443466a2ba2bcd3b679f237c8211c6538cf4af7d2",
+        "v2-graph-monitored.pt": "4f3964497c6d06448d6d4d7430ce997739abbf92511b76bc4cc42b724ae0b632"
+      }
+    },
+    {
+      "cell": "v1-residual-eager",
+      "status": "pass",
+      "versions": {
+        "vllm": "0.30.0",
+        "torch": "2.13.0",
+        "DMI": "1.2.0",
+        "DMI-vLLM-Integration": "0.30.0"
+      },
+      "configuration": {
+        "model": "/data2/yibo/home_cache/huggingface/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca",
+        "dtype": "torch.bfloat16",
+        "enforce_eager": true,
+        "custom_ops": [
+          "all"
+        ],
+        "compile_mode": 0,
+        "graph_mode": "NONE",
+        "max_model_len": 256,
+        "max_num_seqs": 4,
+        "max_num_batched_tokens": 64,
+        "seed": 42,
+        "temperature": 0,
+        "max_tokens": 8,
+        "enable_prefix_caching": false,
+        "tp": 1,
+        "pp": 1,
+        "kv_cache_memory_bytes": 1073741824
+      },
+      "public_equal": true,
+      "raw_logits_equal": true,
+      "logit_steps": 8,
+      "first_step_max_abs_diff": 0,
+      "storage_rows": 1416,
+      "artifact_directory": "/tmp/v030-fixed-kv.H3m2W0",
+      "sha256": {
+        "v1-residual-eager-stock.pt": "eb6286413a35166f329b738c721d7a6e4182140ce27e8513abb33bb5963042cb",
+        "v1-residual-eager-monitored.pt": "7513a619ee73c53435f3d209ff49f3d93b238a557f9861dcf1376f27fb37d048"
+      },
+      "residual_reference_rows": 1368
+    }
+  ],
+  "stock_repeat": {
+    "public_equal": true,
+    "raw_logits_equal": true,
+    "aot_reload_observed": true,
+    "note": "Original receipt predates optional kv_cache_memory_bytes metadata; unset in both runs."
+  }
+}

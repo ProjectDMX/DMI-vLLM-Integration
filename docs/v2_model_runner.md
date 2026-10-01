@@ -1,7 +1,7 @@
 # vLLM V2 model-runner audit
 
 Historical 0.27.1 evidence only. For the current port and changed signatures,
-see [the 0.29.0 audit](v029-port.md).
+see [the 0.30.0 audit](v030-port.md).
 
 This integration targets official vLLM `v0.27.1` at
 `6e448d0ea9bf3d88d898b65449ca6dc2aec170ac`. The V2 work was audited from

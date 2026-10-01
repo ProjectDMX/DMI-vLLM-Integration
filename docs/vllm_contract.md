@@ -4,16 +4,16 @@ This integration depends on the following behavior from the target official
 vLLM release, including private execution interfaces used to observe the model
 work that vLLM actually performs.
 
-Target: **vLLM 0.29.0**. The assumptions below define the intended boundary,
-not GPU qualification for every mode; see [0.29 evidence](v029-port.md).
+Target: **vLLM 0.30.0**. The assumptions below define the intended boundary,
+not GPU qualification for every mode; see [0.30 evidence](v030-port.md).
 
 ## Model runner and lifecycle
 
-The bounded `tests/v029_smoke.py` harness requires the multiprocess
+The bounded `tests/v030_smoke.py` harness requires the multiprocess
 `EngineCoreProc`: its test-only `pause_scheduler('wait')` barrier is unsupported
 by in-process EngineCore (`VLLM_ENABLE_V1_MULTIPROCESSING=0` is rejected early).
 It also advances the private `LLM.request_counter` to keep request IDs fresh
-while preserving the AOT cache key. The reload check matches the exact 0.29
+while preserving the AOT cache key. The reload check matches the exact 0.30
 log string `Directly load AOT compilation` from `compilation/decorators.py`;
 this is a version-pinned log-string contract, not a public runtime API.
 
@@ -42,7 +42,9 @@ uses it; current Qwen3-Next is not a DMI target. No new support is implied here.
   `prepare_inputs(scheduler_output, batch_req_state, batch_desc)`; the integration
   forwards the batch request state unchanged. Its graph manager exposes
   `dispatch(num_reqs, num_tokens, uniform_token_count, num_active_loras,
-  max_query_len=None)`; the optional query bound must also be forwarded.
+  max_query_len=None, num_ubatches=1)`; both optional arguments must be forwarded.
+  Active DBO/ubatching and KV-sharing fast prefill are rejected because their
+  row layouts are outside the current capture contract.
 - One worker process executes at most one model forward at a time.
 - An `execute_model` update with zero scheduled tokens retires request state
   without invoking the model.
