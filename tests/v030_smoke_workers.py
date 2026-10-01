@@ -18,6 +18,25 @@ class _LogitTap:
         super().load_model(load_dummy_weights=load_dummy_weights)
         self._smoke_active = False
         self._smoke_logits = []
+        self._smoke_execution_modes = []
+        # Observe the FINAL dispatch result, outside the compiled model and
+        # after any DMI capacity fallback. Never alter the returned descriptor.
+        is_v2 = type(self.model_runner).__module__ == "vllm.v1.worker.gpu.model_runner"
+        owner = self.model_runner
+        name = "prepare_inputs" if is_v2 else "_determine_batch_execution_and_padding"
+        original_dispatch = getattr(owner, name)
+
+        def observed_dispatch(*args, **kwargs):
+            result = original_dispatch(*args, **kwargs)
+            if self._smoke_active:
+                descriptor = kwargs.get("batch_desc") if is_v2 else None
+                if is_v2 and descriptor is None:
+                    descriptor = args[2]
+                mode = descriptor.cg_mode if is_v2 else result[0]
+                self._smoke_execution_modes.append(mode.name)
+            return result
+
+        setattr(owner, name, observed_dispatch)
         original = self.model_runner.model.compute_logits
 
         def tapped(*args, **kwargs):
@@ -84,6 +103,9 @@ class _LogitTap:
 
     def smoke_describe_runner(self):
         return type(self.model_runner).__module__
+
+    def smoke_execution_modes(self):
+        return list(self._smoke_execution_modes)
 
     def smoke_dump(self):
         self._smoke_active = False

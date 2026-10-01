@@ -177,6 +177,19 @@ required TP multiple.
 
 ## Compilation and graph replay
 
+The 0.30 strict graph differential gate controls Inductor autotuning identically
+in stock and monitored processes with `deterministic=True`,
+`combo_kernels=True`, and `benchmark_combo_kernel=False` in vLLM's
+`compilation_config.inductor_compile_config`. These are test controls, not
+production overrides. Independent upstream autotuning may select different
+floating-point reductions even for byte-identical kernel source. See the
+[causal control and scoped qualification](v030-port.md).
+
+The test-only worker observes final V1 execution/padding results and the V2
+descriptor passed to `prepare_inputs` during real requests. The comparator
+requires matching dispatch sequences, at least one FULL graph step, and no
+NONE/eager step in a graph cell; capture logs alone cannot satisfy this gate.
+
 - vLLM/PyTorch compilation retains registered custom-op nodes and their
   declared mutation and alias-ordering dependencies.
 - During construction of a `support_torch_compile` model, the compile wrapper

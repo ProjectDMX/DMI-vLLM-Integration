@@ -5,19 +5,21 @@ from copy import deepcopy
 import pytest
 import torch
 
-from tests.v030_smoke import compare, require_multiprocess_engine
+from tests.v030_smoke import compare, compilation_options, require_multiprocess_engine
 from tests.v030_residual_reference import compare_residual_rows, old_residual_expression
 
 
 @pytest.mark.parametrize("fault", [
     None, "public", "runner", "configuration", "versions", "logits",
-    "missing_step", "missing_storage", "missing_configuration",
+    "missing_step", "missing_storage", "missing_configuration", "dispatch",
+    "missing_dispatch", "eager_fallback",
 ])
 def test_smoke_comparator_rejects_false_green(tmp_path, fault):
     stock = {
         "public": [{"request_id": "A", "token_ids": [1, 2], "finish_reason": "length"}],
         "runner": ["vllm.v1.worker.gpu.model_runner"],
-        "configuration": {"custom_ops": ["none"], "max_tokens": 8},
+        "configuration": {"custom_ops": ["none"], "max_tokens": 8, "enforce_eager": False},
+        "execution_modes": [["PIECEWISE", "FULL"]],
         "versions": {"vllm": "0.30.0"},
         "logits": [torch.tensor([[1.0, 2.0]], dtype=torch.bfloat16)],
         "storage_rows": 0,
@@ -35,6 +37,12 @@ def test_smoke_comparator_rejects_false_green(tmp_path, fault):
         monitored["storage_rows"] = 0
     elif fault == "missing_configuration":
         del monitored["configuration"]
+    elif fault == "dispatch":
+        monitored["execution_modes"] = [["NONE"]]
+    elif fault == "missing_dispatch":
+        del monitored["execution_modes"]
+    elif fault == "eager_fallback":
+        stock["execution_modes"] = monitored["execution_modes"] = [["NONE"]]
     paths = [tmp_path / "stock.pt", tmp_path / "monitored.pt"]
     for value, path in zip((stock, monitored), paths):
         torch.save(value, path)
@@ -86,6 +94,19 @@ def test_smoke_barrier_rejects_inprocess_engine(monkeypatch):
     monkeypatch.setenv("VLLM_ENABLE_V1_MULTIPROCESSING", "0")
     with pytest.raises(RuntimeError, match="EngineCoreProc-only"):
         require_multiprocess_engine()
+
+
+def test_compile_control_preserves_graph_and_does_not_override_production_defaults():
+    assert compilation_options(graph=False, custom_ops=None, deterministic=False) == {}
+    default = compilation_options(graph=True, custom_ops=None, deterministic=False)
+    assert default == {"cudagraph_capture_sizes": [1, 2, 3, 4, 32]}
+    controlled = compilation_options(graph=True, custom_ops=None, deterministic=True)
+    assert controlled == {**default, "inductor_compile_config": {
+        "deterministic": True, "combo_kernels": True,
+        "benchmark_combo_kernel": False,
+    }}
+    with pytest.raises(ValueError, match="requires --graph"):
+        compilation_options(graph=False, custom_ops=None, deterministic=True)
 
 
 @pytest.mark.parametrize("clear_path", [False, True])

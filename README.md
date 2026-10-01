@@ -1,7 +1,7 @@
 # DMI vLLM integration
 
 `DMI-vLLM-Integration` connects DMI to an unmodified official vLLM
-installation. This **unreleased 0.30.0 port** targets exactly vLLM `0.30.0` and requires
+installation. This 0.30.0 integration targets exactly vLLM `0.30.0` and requires
 DMI integration API v1, first released with DMI `1.1.0`.
 
 Choose a [DMI release tag](https://github.com/ProjectDMX/DMI/tags) in the
@@ -21,9 +21,11 @@ immutable tags; it is not published to PyPI or another package registry.
 
 Both V1 and V2 adapters are ported. Local GPU qualification is bounded to
 Qwen3-0.6B, BF16, TP1; see the [0.30 audit and evidence](docs/v030-port.md).
-**Default compiled/graph qualification is currently blocked:** V1 and V2 differ
-from stock in raw logits and generated tokens. Do not treat this port as a
-qualified default-configuration release.
+Exact compiled/graph parity uses the explicit deterministic compiler settings
+below, identically in stock and monitored runs. Independent upstream autotuning
+can select numerically different reductions even for identical kernel source;
+the audit retains the original failures and a stock-only causal reproduction.
+The integration does not silently override production compiler settings.
 The V2 runner can be used through vLLM's normal default, or selected explicitly
 with `VLLM_USE_V2_MODEL_RUNNER=1`; V1 remains supported with
 `VLLM_USE_V2_MODEL_RUNNER=0`. V2 speculative decoding is rejected before CUDA
@@ -31,9 +33,9 @@ initialization because its computed-token accounting is not yet part of this
 contract. Other unsupported architectures and parallel modes are also rejected
 before model execution.
 
-The bounded V1 and V2 eager cells pass. Use a **fresh version-specific**
+Use a **fresh version-specific**
 `VLLM_CACHE_ROOT` when migrating; old shared compilation artifacts are not a
-valid baseline. The compiled failure occurred even with fresh caches.
+valid baseline.
 V2 batch-sharded sampling is rejected when `final_logits` capture is selected.
 
 The public `dmi_vllm_integration.worker.DMXGPUWorker` entry point imports and
@@ -91,7 +93,14 @@ from vllm import LLM, SamplingParams
 
 llm = LLM(
     model="Qwen/Qwen3-0.6B",
-    enforce_eager=True,  # Default compiled/graph transparency is not qualified.
+    enforce_eager=False,
+    # Reproducible compiler selection; use the SAME flags for a stock baseline.
+    # CUDA graphs and the upstream combo-kernel fusion remain enabled.
+    compilation_config={"inductor_compile_config": {
+        "deterministic": True,
+        "combo_kernels": True,
+        "benchmark_combo_kernel": False,
+    }},
     worker_cls="dmi_vllm_integration.worker.DMXGPUWorker",
     additional_config={"dmx_hook_selection": "resid_pre,final_ln,token_ids,final_logits"},
 )

@@ -15,18 +15,30 @@ mkdir -p "$artifact_root"
 run_root=$(mktemp -d "$artifact_root/v030-smoke.XXXXXX")
 export HF_HUB_OFFLINE=1
 printf 'Evidence directory: %s\n' "$run_root"
+common_args=()
+if [[ -n "${DMI_V030_KV_CACHE_MEMORY_BYTES:-}" ]]; then
+    common_args+=(--kv-cache-memory-bytes "$DMI_V030_KV_CACHE_MEMORY_BYTES")
+fi
 
 for runner in v1 v2; do
     for execution in eager graph; do
         cell="$runner-$execution"
         graph_args=()
-        if [[ "$execution" == graph ]]; then graph_args=(--graph); fi
+        if [[ "$execution" == graph ]]; then
+            graph_args=(--graph)
+            # Reproducible numerics in BOTH processes, not a production default
+            # change. Independent upstream autotuning can choose different
+            # floating-point reductions even for identical generated kernels.
+            if [[ "${DMI_V030_DETERMINISTIC_COMPILE:-1}" == 1 ]]; then
+                graph_args+=(--deterministic-compile)
+            fi
+        fi
         capture_id="dmi-$cell-${run_root##*/}"
         for mode in stock monitored; do
             "${runtime_env[@]}" \
                 VLLM_CACHE_ROOT="$run_root/cache/$cell/$mode" \
                 "$smoke_python" -m tests.v030_smoke \
-                --mode "$mode" --runner "$runner" "${graph_args[@]}" \
+                --mode "$mode" --runner "$runner" "${graph_args[@]}" "${common_args[@]}" \
                 --model-id "$capture_id" --db-host "${DMX_DB_HOST:-localhost}" \
                 --output "$run_root/$cell-$mode.pt" \
                 > "$run_root/$cell-$mode.log" 2>&1
@@ -43,7 +55,7 @@ for runner in v1 v2; do
                 "${runtime_env[@]}" \
                     VLLM_CACHE_ROOT="$run_root/cache/$cell/$mode" \
                     "$smoke_python" -m tests.v030_smoke \
-                    --mode "$mode" --runner v2 --graph \
+                    --mode "$mode" --runner v2 "${graph_args[@]}" "${common_args[@]}" \
                     --model-id "$capture_id" --request-offset 100 \
                     --db-host "${DMX_DB_HOST:-localhost}" \
                     --output "$run_root/$cell-$mode-reloaded.pt" \
@@ -64,7 +76,7 @@ cell=v1-residual-eager
 capture_id="dmi-$cell-${run_root##*/}"
 for mode in stock monitored; do
     "${runtime_env[@]}" "$smoke_python" -m tests.v030_smoke \
-        --mode "$mode" --runner v1 --residual-reference \
+        --mode "$mode" --runner v1 --residual-reference "${common_args[@]}" \
         --hooks resid_pre,resid_mid,resid_final,token_ids,final_logits \
         --model-id "$capture_id" --db-host "${DMX_DB_HOST:-localhost}" \
         --output "$run_root/$cell-$mode.pt" \

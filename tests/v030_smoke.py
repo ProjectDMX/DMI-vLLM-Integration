@@ -22,6 +22,14 @@ def compare(stock_path: Path, monitored_path: Path) -> None:
     assert stock["runner"] == monitored["runner"], "runner mismatch"
     assert stock["configuration"] == monitored["configuration"], "configuration mismatch"
     assert stock["versions"] == monitored["versions"], "runtime mismatch"
+    assert stock["execution_modes"] == monitored["execution_modes"], "dispatch mismatch"
+    for modes in stock["execution_modes"]:
+        assert modes, "no observed request dispatch"
+        if stock["configuration"]["enforce_eager"]:
+            assert set(modes) == {"NONE"}, modes
+        else:
+            assert "FULL" in modes, "no full CUDA graph execution"
+            assert "NONE" not in modes, "unexpected eager fallback"
     assert stock["logits"] and len(stock["logits"]) == len(monitored["logits"])
     for step, (left, right) in enumerate(zip(stock["logits"], monitored["logits"])):
         assert torch.equal(left, right), f"raw logits differ at step {step}"
@@ -34,6 +42,7 @@ def compare(stock_path: Path, monitored_path: Path) -> None:
                       "logit_steps": len(stock["logits"]),
                       "storage_rows": monitored["storage_rows"],
                       "runner": stock["runner"],
+                      "execution_modes": stock["execution_modes"],
                       "residual_reference_rows": residual_rows}, indent=2))
 
 
@@ -120,6 +129,26 @@ def require_multiprocess_engine():
                            "pause_scheduler('wait') is an EngineCoreProc-only barrier")
 
 
+def compilation_options(*, graph: bool, custom_ops: str | None,
+                        deterministic: bool) -> dict:
+    """Keep numerical compiler controls explicit, identical and cache-keyed."""
+    # The ragged prefill has 31 tokens: include 32 so it exercises PIECEWISE
+    # instead of exceeding the graph-size limit and silently running NONE.
+    options = {"cudagraph_capture_sizes": [1, 2, 3, 4, 32]} if graph else {}
+    if deterministic:
+        if not graph:
+            raise ValueError("deterministic compilation requires --graph")
+        # PyTorch 2.13 rejects numerical combo-kernel benchmarking in
+        # deterministic mode. Keep compilation and combo kernels enabled.
+        options["inductor_compile_config"] = {
+            "deterministic": True, "combo_kernels": True,
+            "benchmark_combo_kernel": False,
+        }
+    if custom_ops:
+        options["custom_ops"] = [custom_ops]
+    return options
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["stock", "monitored", "compare"], required=True)
@@ -129,6 +158,8 @@ def main() -> None:
     parser.add_argument("--model", default="Qwen/Qwen3-0.6B")
     parser.add_argument("--runner", choices=["v1", "v2"], default="v2")
     parser.add_argument("--graph", action="store_true")
+    parser.add_argument("--deterministic-compile", action="store_true",
+                        help="fix compiler numerical choices in BOTH comparison processes")
     parser.add_argument("--residual-reference", action="store_true",
                         help="independent old-expression oracle; V1 eager only")
     parser.add_argument("--hooks", default="resid_pre,final_ln,token_ids,final_logits")
@@ -176,10 +207,10 @@ def main() -> None:
                   enable_prefix_caching=False, gpu_memory_utilization=0.35,
                   enforce_eager=not args.graph,
                   worker_cls=f"tests.v030_smoke_workers.{args.mode.title()}{args.runner.upper()}Worker")
-    if args.graph:
-        kwargs["compilation_config"] = {"cudagraph_capture_sizes": [1, 2, 3, 4]}
-    if args.custom_ops:
-        kwargs.setdefault("compilation_config", {})["custom_ops"] = [args.custom_ops]
+    compile_options = compilation_options(graph=args.graph, custom_ops=args.custom_ops,
+                                          deterministic=args.deterministic_compile)
+    if compile_options:
+        kwargs["compilation_config"] = compile_options
     if args.kv_cache_memory_bytes is not None:
         if args.kv_cache_memory_bytes <= 0:
             parser.error("--kv-cache-memory-bytes must be positive")
@@ -199,6 +230,7 @@ def main() -> None:
         "enforce_eager": resolved.model_config.enforce_eager,
         "custom_ops": resolved.compilation_config.custom_ops,
         "compile_mode": int(resolved.compilation_config.mode),
+        "inductor_compile_config": dict(resolved.compilation_config.inductor_compile_config),
         "graph_mode": str(resolved.compilation_config.cudagraph_mode),
         "max_model_len": 256, "max_num_seqs": 4, "max_num_batched_tokens": 64,
         "seed": 42, "temperature": 0, "max_tokens": 8,
@@ -226,6 +258,7 @@ def main() -> None:
     llm.enqueue(prompts, SamplingParams(temperature=0, max_tokens=8, ignore_eos=True))
     core.call_utility("resume_scheduler")
     outputs = llm.wait_for_completion()
+    execution_modes = llm.collective_rpc("smoke_execution_modes")
     llm.collective_rpc("smoke_dump")
     residual_reference = (torch.load(os.environ["DMI_SMOKE_RESIDUALS_PATH"], weights_only=True)
                           if args.residual_reference else None)
@@ -244,6 +277,7 @@ def main() -> None:
                "stop_reason": o.outputs[0].stop_reason} for o in outputs]
     args.output.parent.mkdir(parents=True, exist_ok=True)
     torch.save({"public": public, "runner": runner, "model_id": model_id,
+                "execution_modes": execution_modes,
                 "configuration": configuration, "hooks": args.hooks,
                 "versions": {name: version(name) for name in ("vllm", "torch", "DMI", "DMI-vLLM-Integration")},
                 "storage_rows": storage_rows,
