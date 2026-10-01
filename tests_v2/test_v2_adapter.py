@@ -72,6 +72,15 @@ def test_v2_worker_rejects_v1_and_speculative_decoding() -> None:
         worker._validate_dmi_config()
 
 
+def test_v030_rejects_fast_prefill_before_device_init() -> None:
+    worker = DMXV2GPUWorker.__new__(DMXV2GPUWorker)
+    worker.vllm_config = _worker_config()
+    worker.use_v2_model_runner = True
+    worker.vllm_config.cache_config = SimpleNamespace(kv_sharing_fast_prefill=True)
+    with pytest.raises(RuntimeError, match="KV-sharing fast prefill"):
+        worker._validate_dmi_config()
+
+
 def test_v2_records_prepared_layout_and_input_dtype() -> None:
     scheduler_output = _scheduler()
     adaptor = VLLMAdaptor.__new__(VLLMAdaptor)
@@ -243,6 +252,7 @@ def _wrapped_worker(*, force_eager: bool = False):
         uniform_token_count,
         num_active_loras,
         max_query_len=None,
+        num_ubatches=1,
     ):
         events.append(
             (
@@ -252,6 +262,7 @@ def _wrapped_worker(*, force_eager: bool = False):
                 uniform_token_count,
                 num_active_loras,
                 max_query_len,
+                num_ubatches,
             )
         )
         return graph_candidate
@@ -286,7 +297,7 @@ def test_v2_wrappers_commit_after_real_dispatch_and_prepare() -> None:
     assert descriptor is candidate
     batch_req_state = object()
     runner.prepare_inputs(scheduler_output, batch_req_state, descriptor)
-    assert events[0][-1] == 3
+    assert events[0][-2:] == (3, 1)
     assert events[2][2] is batch_req_state
 
     assert [event[0] for event in events] == [
@@ -297,6 +308,18 @@ def test_v2_wrappers_commit_after_real_dispatch_and_prepare() -> None:
         "commit",
     ]
     assert adaptor._step_state.phase is VLLMStepPhase.COMMITTED
+
+
+def test_v030_dispatch_forwards_warmup_but_rejects_active_ubatching() -> None:
+    _worker, adaptor, _runner, manager, _scheduler, candidate, events = _wrapped_worker()
+    assert manager.dispatch(2, 5, 1, 0, num_ubatches=2) is candidate
+    assert events[-1][-1] == 2
+    events.clear()
+    adaptor._step_state.phase = VLLMStepPhase.ARMED
+    with pytest.raises(RuntimeError, match="DBO/ubatching"):
+        manager.dispatch(2, 5, 1, 0, num_ubatches=2)
+    assert events == []
+    assert adaptor._step_state.phase is VLLMStepPhase.ARMED
 
 
 def test_v2_wrapper_forces_eager_and_restores_dispatch() -> None:

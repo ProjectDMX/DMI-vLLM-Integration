@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-01",
+  "control": {
+    "purpose": "Diagnostic only: stock-only cold compile with the single observed monitored Q/K kernel autotune choice, keeping production compiler flags and all model code unchanged. Not a release qualification retry.",
+    "expected": "Reproduce the original monitored output solely by changing the upstream autotune selection; compare all raw logits and public outputs, not only the divergent token.",
+    "source": "/tmp/v030-fixed-kv.H3m2W0",
+    "stock_aot_hash": "7ea8227967ed77b2ea925e9341f6e1ed72b8bc9c1b140d92ed0530670158a4ca",
+    "items": [
+      {
+        "relative_path": "nj/a6f2dbec4f6d8ea5e13be9d01a8718d947e712b0d147e763b0543704ac0cb33f.best_config",
+        "stock": {
+          "XBLOCK": 8,
+          "num_warps": 2,
+          "num_stages": 1,
+          "configs_hash": "b14aec259222f7b44b1dad3167d12a680f5f588c0b65f17b7babaec5bb8b1c62",
+          "found_by_coordesc": false,
+          "time_taken_ms": 34,
+          "triton_cache_hash": "PGJTJTYFPPHECJEL433BUPRXGG6MK5AVDPDZKFS34GY2G4FQJZPA"
+        },
+        "monitored": {
+          "XBLOCK": 1,
+          "num_warps": 2,
+          "num_stages": 1,
+          "configs_hash": "b14aec259222f7b44b1dad3167d12a680f5f588c0b65f17b7babaec5bb8b1c62",
+          "found_by_coordesc": false,
+          "time_taken_ms": 35,
+          "triton_cache_hash": "OU3T5RQHN5DJJF47CN7QP2LN6N3YAFGGDXYT32HZ2CNTFQU5YFMQ"
+        },
+        "kernel_source_sha256": "a154e688c4d79af3818318ebc4f696abe9f8f2a5bd673de92211d98aadbedbcf"
+      }
+    ]
+  },
+  "procedure": "Fresh stock-only cold compile; seed six recorded best_config entries for byte-identical stock/monitored kernel sources. Five have the same numerical parameters; only Q/K XBLOCK changes from original stock 8 to monitored 1. No production compiler flags or model arithmetic changed. This is diagnostic attribution, not retry-to-match qualification.",
+  "comparisons": {
+    "original_stock": {
+      "public_equal": false,
+      "raw_logits_equal": false,
+      "logit_steps": 8,
+      "first_step_max_abs_diff": 0.1875
+    },
+    "original_monitored": {
+      "public_equal": true,
+      "raw_logits_equal": true,
+      "logit_steps": 8,
+      "first_step_max_abs_diff": 0.0
+    }
+  },
+  "versions": {
+    "vllm": "0.30.0",
+    "torch": "2.13.0",
+    "DMI": "1.2.0",
+    "DMI-vLLM-Integration": "0.30.0"
+  },
+  "configuration": {
+    "model": "/data2/yibo/home_cache/huggingface/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca",
+    "dtype": "torch.bfloat16",
+    "enforce_eager": false,
+    "custom_ops": [
+      "none"
+    ],
+    "compile_mode": 3,
+    "inductor_compile_config": {
+      "enable_auto_functionalized_v2": false,
+      "combo_kernels": true,
+      "benchmark_combo_kernel": true
+    },
+    "graph_mode": "FULL_AND_PIECEWISE",
+    "max_model_len": 256,
+    "max_num_seqs": 4,
+    "max_num_batched_tokens": 64,
+    "seed": 42,
+    "temperature": 0,
+    "max_tokens": 8,
+    "enable_prefix_caching": false,
+    "tp": 1,
+    "pp": 1,
+    "kv_cache_memory_bytes": 1073741824
+  },
+  "artifacts": {
+    "control_stock": {
+      "path": "/tmp/v030-stock-tuning-control.cfUGWf/stock.pt",
+      "sha256": "6955d919eeb79baacef619ab90664c01101dd23d05f0b575721bede6a6cc5d3c"
+    },
+    "original_stock": {
+      "path": "/tmp/v030-fixed-kv.H3m2W0/v2-graph-stock.pt",
+      "sha256": "2aa17118b40dfb3c2f1526c443466a2ba2bcd3b679f237c8211c6538cf4af7d2"
+    },
+    "original_monitored": {
+      "path": "/tmp/v030-fixed-kv.H3m2W0/v2-graph-monitored.pt",
+      "sha256": "4f3964497c6d06448d6d4d7430ce997739abbf92511b76bc4cc42b724ae0b632"
+    }
+  }
+}

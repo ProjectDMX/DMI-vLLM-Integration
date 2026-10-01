@@ -1523,6 +1523,8 @@ class DMXV2GPUWorker(Worker):
             )
         if parallel.use_ubatching:
             raise RuntimeError("DMI vLLM does not support DBO/ubatching")
+        if getattr(getattr(config, "cache_config", None), "kv_sharing_fast_prefill", False):
+            raise RuntimeError("DMI vLLM V2 does not support KV-sharing fast prefill")
         if getattr(parallel, "enable_elastic_ep", False):
             raise RuntimeError(
                 "DMI vLLM does not support elastic expert parallelism"
@@ -1669,13 +1671,18 @@ class DMXV2GPUWorker(Worker):
             uniform_token_count: Optional[int],
             num_active_loras: int,
             max_query_len: Optional[int] = None,
+            num_ubatches: int = 1,
         ) -> Any:
+            state = adaptor._step_state
+            if state.phase is not VLLMStepPhase.IDLE and num_ubatches != 1:
+                raise RuntimeError("DMI vLLM does not support DBO/ubatching")
             candidate = original_dispatch(
                 num_reqs,
                 num_tokens,
                 uniform_token_count,
                 num_active_loras,
                 max_query_len=max_query_len,
+                num_ubatches=num_ubatches,
             )
             state = adaptor._step_state
             if state.phase is VLLMStepPhase.IDLE:
@@ -1702,6 +1709,7 @@ class DMXV2GPUWorker(Worker):
                     num_tokens=num_tokens,
                     num_reqs=num_reqs,
                     num_active_loras=num_active_loras,
+                    num_ubatches=num_ubatches,
                 )
             if adaptor._validation_mode is VLLMValidationMode.VERIFY:
                 state.expected_dispatch = (
