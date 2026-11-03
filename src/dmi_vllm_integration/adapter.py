@@ -26,10 +26,14 @@ Key pieces:
 """
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from enum import Enum, auto
+import logging
+import math
 import os
 import re
+import time
 import warnings
 from typing import Any, List, Optional, Tuple
 from uuid import uuid4
@@ -43,13 +47,22 @@ from vllm.distributed.ec_transfer import get_ec_transfer, has_ec_transfer
 from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.v1.worker.gpu_worker import Worker
 
+from . import graph_toggle
 from .architectures import (
     ARCHITECTURE_REMAP as _ARCH_REMAP,
     require_supported_architecture,
 )
+from .capture_selection import CAPTURE_MODES, CaptureSelection, with_inline_heads
 from .compat import require_compatible_runtime
 from .model_shape import make_model_shape_from_hf_config
 from .model_validation import validate_model_specific_config
+from .models.residual import RESID_PRE_READ_MODES
+from .sinks import (
+    clear_sink_factory,
+    make_registered_sink,
+    register_sink_factory,
+    ring_consumer_for,
+)
 
 from dmi_vllm_integration.dmi_api import (
     ALL_HOOK_TYPES,
@@ -269,6 +282,8 @@ class _VLLMHookSelection:
         hf_config: Any,
         final_logits_dtype: Optional[torch.dtype] = None,
         layers: Optional[Any] = None,
+        layer_set: Optional[frozenset] = None,
+        inline_head_slots: int = 0,
     ) -> "_VLLMHookSelection":
         """Select local and model-wide rank-type hooks once at attachment.
 
@@ -377,6 +392,19 @@ class _VLLMHookSelection:
             selected_model_wide = tuple(selected)
             local_hooks = tuple(spec for spec in local_hooks if in_range(spec))
 
+        if layer_set is not None:
+            selected_model_wide = tuple(
+                spec for spec in selected_model_wide
+                if spec.layer_no < 0 or spec.layer_no in layer_set)
+            local_hooks = tuple(
+                spec for spec in local_hooks
+                if spec.layer_no < 0 or spec.layer_no in layer_set)
+
+        # In-graph head specs ride on their source HookPoints; the model-wide
+        # candidate sets must count them exactly as the local specs do.
+        selected_model_wide = tuple(
+            with_inline_heads(selected_model_wide, inline_head_slots))
+
         from vllm.distributed.utils import get_pp_indices
 
         pp_intervals = tuple(
@@ -467,12 +495,42 @@ class VLLMAdaptor(BackendAdaptor):
         request order recorded after vLLM prepares its inputs.
     """
 
+    # Defaults for adaptors assembled without __init__ (see __init__).
+    node_toggle = False
+    request_context_callback: Optional[Any] = None
+    _selection: Optional[CaptureSelection] = None
+    _step_gated = True
+    _step_request_identities: dict = {}
+
     def __init__(
         self, engine: Any, model_id: str, vllm_config: Any,
         *, gpu_padding_strip: bool = True,
+        selection: Optional[CaptureSelection] = None,
+        node_toggle: bool = False,
+        allow_eager_fallback: bool = True,
     ) -> None:
-        super().__init__(engine, model_id)
+        if allow_eager_fallback:
+            super().__init__(engine, model_id)
+        else:
+            try:
+                super().__init__(engine, model_id, allow_eager_fallback=False)
+            except TypeError as exc:
+                raise RuntimeError(
+                    "dmx_allow_eager_fallback=False requires DMI with strict "
+                    "eager-fallback rejection") from exc
         self.vllm_config = vllm_config
+        # Request/HookPoint capture selection (full capture by default).
+        self._selection = selection
+        # CUDA-graph node toggling: each step is classified gated (a full
+        # graph replays) or ungated from vLLM's real dispatch.
+        self.node_toggle = bool(node_toggle)
+        self._step_gated = True
+        # Called each step with {request_id: prompt_length} before capture
+        # is planned (the sink's observe_request_context, when it has one).
+        self.request_context_callback: Optional[Any] = None
+        # Normalized -> scheduler request ID of this step's requests, so a
+        # delayed completion notice of a reused public ID can be told apart.
+        self._step_request_identities: dict = {}
         self._debug_step: bool = bool(os.environ.get("RING_DEBUG_STEP"))
         # The per-call state carries a monotonic pre-dispatch eager latch.
         # transport.force_eager is assigned during the actual-layout commit
@@ -517,6 +575,13 @@ class VLLMAdaptor(BackendAdaptor):
         self._capture_sizes: Tuple[int, ...] = ()
         self._max_capture_size = 0
         self._capacity_warned_shapes: set[tuple[int, int]] = set()
+
+    @property
+    def selection(self) -> CaptureSelection:
+        """Capture selection; full capture unless configured."""
+        if self._selection is None:
+            self._selection = CaptureSelection()
+        return self._selection
 
     @property
     def last_committed_layout(self) -> Optional[_VLLMRealLayout]:
@@ -578,10 +643,14 @@ class VLLMAdaptor(BackendAdaptor):
         # When the worker forces eager for this batch, the actual
         # tensor will not be padded -- swap meta q_len from padded
         # back to the unpadded total_q stashed during build_step_context.
-        import dataclasses
+        changes: dict = {}
         if self._last_total_q and ctx.q_len != self._last_total_q:
-            return dataclasses.replace(ctx, q_len=self._last_total_q)
-        return ctx
+            changes["q_len"] = self._last_total_q
+        if self.selection.active:
+            # The eager safety net copies every hook's full tensor: tables
+            # and offsets fall back to the un-compacted rows.
+            changes.update(self.selection.full_payload(ctx, self._last_total_q))
+        return dataclasses.replace(ctx, **changes) if changes else ctx
 
     def _warn_once_capacity(
         self, ctx: StepContext, total_bytes: int, n_hooks: int
@@ -677,6 +746,14 @@ class VLLMAdaptor(BackendAdaptor):
 
         tp_rank, dp_rank, ep_rank, pp_rank = self.detect_parallel_ranks()
 
+        self._step_request_identities = dict(
+            zip(layout.req_ids, layout.raw_req_ids))
+        callback = self.request_context_callback
+        if callback is not None and layout.req_ids:
+            lengths = model_runner.input_batch.num_prompt_tokens[
+                :len(layout.req_ids)]
+            callback(dict(zip(layout.req_ids, map(int, lengths.tolist()))))
+
         # logits_to_keep=num_reqs: vLLM's compute_logits returns one
         # logit per request shaped [num_reqs, vocab].  In flattened
         # mode _compute_hook_shape uses logits_to_keep directly as
@@ -684,7 +761,10 @@ class VLLMAdaptor(BackendAdaptor):
         # [num_reqs, vocab].  The p2p thread then slices row j for
         # request j and adjusts the DB token range to (end_token-1,
         # end_token) -- the single predicted position per request.
-        return StepContext(
+        # logits_to_keep stays the unfiltered count when a selection drops
+        # requests: the logits tensor always has one row per request, and
+        # orig_positions index it.
+        ctx = StepContext(
             model_id=str(self.model_id),
             flattened=True,
             req_ids=list(layout.req_ids),
@@ -704,6 +784,18 @@ class VLLMAdaptor(BackendAdaptor):
                 layout.total_rows if self.gpu_padding_strip else None
             ),
         )
+        if self.selection.active:
+            changes = self.selection.plan_step(
+                req_ids=list(layout.req_ids),
+                token_ranges=list(layout.token_ranges),
+                dim0_offsets=list(layout.dim0_offsets),
+                total_rows=layout.total_rows,
+                actual_q_len=ctx.actual_q_len,
+                gated=self._step_gated,
+            )
+            if changes:
+                ctx = dataclasses.replace(ctx, **changes)
+        return ctx
 
     # ----- gpu_padding_strip integration -----
 
@@ -713,8 +805,14 @@ class VLLMAdaptor(BackendAdaptor):
         hook_selection: str = "full",
         *,
         layers: Optional[Any] = None,
+        layer_set: Optional[frozenset] = None,
     ) -> None:
         """Standard attach, plus gpu_padding_strip pool setup when enabled.
+
+        ``layer_set`` (``dmx_hook_layers``) keeps only per-layer hooks whose
+        layer is in the set; global hooks (``layer_no < 0``) always stay.
+        Like ``layers`` it applies to the installed specs and to the
+        model-wide formula sets.
 
         ``layers`` is the optional inclusive ``LayerSelection`` from
         DMI-configurator; it is applied to the installed local specs (via
@@ -737,33 +835,21 @@ class VLLMAdaptor(BackendAdaptor):
         # unconditionally would break every attach on those revisions.
         attach_kwargs = {} if layers is None else {"layers": layers}
         super().attach_model(model, hook_selection, **attach_kwargs)
+        if layer_set is not None:
+            kept = []
+            for spec in self.active_hook_specs:
+                if spec.layer_no < 0 or spec.layer_no in layer_set:
+                    kept.append(spec)
+                else:
+                    # Disabled before capture: the producer never enters a graph.
+                    spec.module.enabled = False
+            self.replace_active_specs(kept)
         head_dtype = self.vllm_config.model_config.head_dtype
         for spec in self.active_hook_specs:
             if spec.hook_type == HOOK_TYPE_FINAL_LOGITS:
                 spec.dtype = head_dtype
         if self.gpu_padding_strip:
-            configured_device = getattr(
-                getattr(self.vllm_config, "device_config", None),
-                "device",
-                None,
-            )
-            if configured_device is None:
-                raise RuntimeError(
-                    "DMI vLLM padding-strip setup requires "
-                    "vllm_config.device_config.device"
-                )
-            try:
-                device = torch.device(configured_device)
-            except (TypeError, RuntimeError) as exc:
-                raise RuntimeError(
-                    "DMI vLLM received an invalid configured device for "
-                    f"padding-strip setup: {configured_device!r}"
-                ) from exc
-            if device.type != "cuda":
-                raise RuntimeError(
-                    "DMI vLLM padding-strip setup requires a CUDA device; "
-                    f"configured device is {device}"
-                )
+            device = self._configured_cuda_device("padding-strip setup")
             self._row_count_dev = torch.empty(
                 1, dtype=torch.int64, device=device
             )
@@ -784,10 +870,36 @@ class VLLMAdaptor(BackendAdaptor):
                 configure_hook_padding_strip(hp, self._row_count_dev, rb)
                 self._strip_eligible_hps.append(hp)
 
-        active_specs = self.active_hook_specs
         cfg = self.model_shape
         if cfg is None:
             raise RuntimeError("DMI vLLM role formulas require an attached ring")
+        capture = self.selection
+        if capture.head_slots:
+            cfg.head_slots = capture.head_slots
+            self.replace_active_specs(
+                with_inline_heads(self.active_hook_specs, capture.head_slots))
+
+        def row_bytes(spec) -> int:
+            return _row_bytes_for_spec(spec, cfg)
+
+        if capture.request_gather or capture.planner is not None:
+            capture.wire(
+                specs=self.active_hook_specs,
+                cfg=cfg,
+                device=(self._configured_cuda_device("request-row gather")
+                        if capture.request_gather else None),
+                ring_engine=self.ring_engine,
+                transport=self.transport,
+                max_num_seqs=int(self.vllm_config.scheduler_config.max_num_seqs),
+                max_num_batched_tokens=int(
+                    self.vllm_config.scheduler_config.max_num_batched_tokens),
+                row_bytes=row_bytes,
+                max_capture_rows=int(getattr(
+                    getattr(self.vllm_config, "compilation_config", None),
+                    "max_cudagraph_capture_size", 0) or 0),
+            )
+
+        active_specs = self.active_hook_specs
         selection = _VLLMHookSelection.from_model(
             model=model,
             local_hooks=active_specs,
@@ -797,6 +909,8 @@ class VLLMAdaptor(BackendAdaptor):
             hf_config=self.vllm_config.model_config.hf_config,
             final_logits_dtype=head_dtype,
             layers=layers,
+            layer_set=layer_set,
+            inline_head_slots=capture.head_slots,
         )
         if not self.user_wants_null_mode:
             self._validate_moe_routing_capture(
@@ -806,6 +920,35 @@ class VLLMAdaptor(BackendAdaptor):
                 selected_hook_types=selection.selected_hook_types,
             )
         self._compile_role_formulas(selection)
+        capture.admit(self.active_hook_specs, cfg, row_bytes)
+
+    def _configured_cuda_device(self, purpose: str) -> torch.device:
+        configured_device = getattr(
+            getattr(self.vllm_config, "device_config", None),
+            "device",
+            None,
+        )
+        if configured_device is None:
+            raise RuntimeError(
+                f"DMI vLLM {purpose} requires vllm_config.device_config.device"
+            )
+        try:
+            device = torch.device(configured_device)
+        except (TypeError, RuntimeError) as exc:
+            raise RuntimeError(
+                "DMI vLLM received an invalid configured device for "
+                f"{purpose}: {configured_device!r}"
+            ) from exc
+        if device.type != "cuda":
+            raise RuntimeError(
+                f"DMI vLLM {purpose} requires a CUDA device; "
+                f"configured device is {device}"
+            )
+        return device
+
+    def row_table_stats(self) -> dict:
+        """Row-table upload counters (``dmi.sync_stats.gather_sync_stats``)."""
+        return self.selection.row_table_stats()
 
     @staticmethod
     def _validate_moe_routing_capture(
@@ -1328,6 +1471,11 @@ class VLLMAdaptor(BackendAdaptor):
 
         state.real_cudagraph_mode = cudagraph_mode
         state.real_batch_descriptor = batch_descriptor
+        if self.node_toggle:
+            # Producers inside a replayed full graph follow the node toggle;
+            # an eager or piecewise step fires the full active set.
+            self._step_gated = graph_toggle.step_is_gated(cudagraph_mode)
+            self.transport.set_gated_step(self._step_gated)
 
         if self._validation_mode is VLLMValidationMode.VERIFY:
             if state.expected_dispatch is not None:
@@ -1383,13 +1531,22 @@ class VLLMAdaptor(BackendAdaptor):
                 ),
                 formula.hook_count,
             )
-            if formula_plan != actual_plan[:2] or actual_needs_eager:
+            if self.selection.active or getattr(
+                    self.transport, "toggle_gate_active", False):
+                # Selection and toggling only ever capture less than the
+                # cached full-capture formula.
+                disagrees = (actual_plan.total_bytes > formula_plan[0]
+                             or actual_plan.hook_count > formula_plan[1])
+            else:
+                disagrees = formula_plan != actual_plan[:2]
+            if disagrees or actual_needs_eager:
                 raise RuntimeError(
                     "DMI vLLM cached local formula disagrees with actual plan: "
                     f"cached={formula_plan}, actual={actual_plan}"
                 )
 
         self.commit_step(ctx, actual_plan)
+        self.selection.upload()
 
         if (self.gpu_padding_strip
                 and self._pinned_row_count is not None
@@ -1446,10 +1603,16 @@ class DMXGPUWorker(Worker):
       ``compile_or_warm_up_model`` -- super + clear null_mode (unless user
                                        opted-in via ``dmx_null_mode``).
       ``execute_model``         -- arm per-call state + super; the dispatch
-                                    wrapper commits DMI metadata before forward.
-      ``stop_monitoring``       -- adaptor.close (CUDA sync, ring stop,
-                                    deactivate transport, host engine stop).
+                                    wrapper commits DMI metadata before forward;
+                                    then finalize finished requests.
+      ``stop_monitoring``       -- deliver the tail to the sink, finalize the
+                                    remaining requests, adaptor.close (CUDA
+                                    sync, ring stop, deactivate transport,
+                                    host engine stop).
       ``shutdown``              -- best-effort stop_monitoring + super.
+
+    An in-process consumer registered with ``register_sink_factory`` (and no
+    ``dmx_db_host``) receives the captured rows; see ``sinks``.
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -1459,6 +1622,38 @@ class DMXGPUWorker(Worker):
         self._dmx_requested_hook_selection: str = "vllm-full"
         self._dmx_hook_selection: str = "vllm-full"
         self._dmx_stopped = False
+        # In-process consumer from the registered sink factory (owned by
+        # whoever registered it; never started or stopped here).
+        self._dmx_sink: Any = None
+        self._dmx_node_toggle = False
+        self._dmx_lazy_toggle = False
+        self._dmx_device_toggle = False
+        self._dmx_enabled_hooks: Optional[list] = None
+        # Deferred per-request finalize.  vLLM reports a request finished
+        # while its last rows may still be in flight to the consumer, so a
+        # finished request waits here until a delivery barrier succeeds:
+        # request -> remaining steps before it is finalized valid=False.
+        self._dmx_auto_finalize = False
+        self._dmx_pending_finalize: dict = {}
+        # Requests observed since their last finalize (stop-time sweep).
+        self._dmx_live_requests: dict = {}
+        self._dmx_finalize_drain_timeout_ms = 200
+        self._dmx_finalize_max_steps = 8
+        self._dmx_finalize_sweep_timeout_ms = 5000
+        self._dmx_finalize_timeouts = 0
+        self._dmx_finalize_waits: List[float] = []
+        self._dmx_stopped_sink_stats: Optional[dict] = None
+
+    _DMX_WAIT_CAP = 512
+    # Defaults for workers assembled without __init__ (see __init__).
+    _dmx_sink: Any = None
+    _dmx_node_toggle = False
+    _dmx_lazy_toggle = False
+    _dmx_device_toggle = False
+    _dmx_enabled_hooks: Optional[list] = None
+    _dmx_auto_finalize = False
+    _dmx_stopped_sink_stats: Optional[dict] = None
+    _dmx_hook_layers: Optional[frozenset] = None
 
     def _validate_dmi_config(self) -> None:
         """Reject unsupported V1-generation configurations before CUDA init."""
@@ -1555,6 +1750,30 @@ class DMXGPUWorker(Worker):
         self._dmx_hook_selection = effective_hook_selection
         if selection_warning is not None:
             warnings.warn(selection_warning, UserWarning, stacklevel=2)
+        raw_layers = str(_cfg(additional_config, "dmx_hook_layers",
+                              "DMX_HOOK_LAYERS", "")).strip()
+        try:
+            self._dmx_hook_layers = (
+                frozenset(int(t) for t in raw_layers.split(",") if t.strip())
+                if raw_layers else None)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"dmx_hook_layers must be comma-separated layer numbers, got "
+                f"{raw_layers!r}") from exc
+        if self._dmx_hook_layers is not None and (
+                not self._dmx_hook_layers
+                or min(self._dmx_hook_layers) < 0):
+            raise RuntimeError("dmx_hook_layers must list nonnegative layers")
+        resid_read = additional_config.get("dmx_resid_pre_read", "add")
+        if resid_read not in RESID_PRE_READ_MODES:
+            raise RuntimeError(
+                f"dmx_resid_pre_read must be one of {RESID_PRE_READ_MODES}, "
+                f"got {resid_read!r}")
+        capture_mode = additional_config.get("dmx_monitor_capture_mode", "dynamic")
+        if capture_mode not in CAPTURE_MODES:
+            raise RuntimeError(
+                f"dmx_monitor_capture_mode must be one of {CAPTURE_MODES}, "
+                f"got {capture_mode!r}")
 
     def init_device(self) -> None:
         self._validate_dmi_config()
@@ -1602,21 +1821,82 @@ class DMXGPUWorker(Worker):
             host_engine = DMXHostEngine(stage_cfg)
             self._dmx_host_engine = host_engine
 
+        # In-process consumer: the registered sink factory, when no
+        # ClickHouse host is configured.
+        sink = None if db_host else make_registered_sink()
+        if (sink is None and not db_host
+                and _cfg(ac, "dmx_require_sink", "DMX_REQUIRE_SINK", False)):
+            raise RuntimeError(
+                "dmx_require_sink is set but no sink factory is registered "
+                "(register_sink_factory in this process, with "
+                "VLLM_ENABLE_V1_MULTIPROCESSING=0?)")
+        self._dmx_sink = sink
+
+        self._dmx_node_toggle = bool(_cfg(
+            ac, "dmx_node_toggle", "DMX_NODE_TOGGLE", False))
+        self._dmx_lazy_toggle = bool(_cfg(
+            ac, "dmx_lazy_toggle", "DMX_LAZY_TOGGLE", False))
+        self._dmx_device_toggle = bool(_cfg(
+            ac, "dmx_device_toggle", "DMX_DEVICE_TOGGLE", False))
+        self._dmx_enabled_hooks = (
+            graph_toggle.parse_enabled_hooks(
+                _cfg(ac, "dmx_enabled_hooks", "DMX_ENABLED_HOOKS", ""))
+            if self._dmx_node_toggle else None)
+        if not self._dmx_node_toggle and (
+                self._dmx_lazy_toggle or self._dmx_device_toggle
+                or _cfg(ac, "dmx_enabled_hooks", "DMX_ENABLED_HOOKS", "")):
+            raise RuntimeError(
+                "dmx_lazy_toggle, dmx_device_toggle and dmx_enabled_hooks "
+                "require dmx_node_toggle")
+
         ring_cfg = RingConfig()
         ring_cfg.payload_ring_bytes = ring_payload_mb * 1024 * 1024
         ring_cfg.pinned_staging_bytes = ring_pinned_mb * 1024 * 1024
         ring_cfg.task_ring_entries = ring_entries
+        # A live consumer needs rows to keep arriving while serving, and a
+        # small toggled hook set may never reach the byte/entry thresholds:
+        # both default to a 50 ms periodic flush.
         ring_cfg.drain_flush_timeout_us = int(_cfg(
             ac, "dmx_drain_flush_timeout_us", "DMX_DRAIN_FLUSH_TIMEOUT_US",
-            0))
+            50000 if (sink is not None or self._dmx_node_toggle) else 0))
+        entry_threshold = _cfg(
+            ac, "dmx_drain_flush_entry_threshold",
+            "DMX_DRAIN_FLUSH_ENTRY_THRESHOLD", None)
+        if entry_threshold is not None:
+            ring_cfg.drain_flush_entry_threshold = int(entry_threshold)
+        pool_cap_mb = _cfg(ac, "dmx_p2p_pool_cap_mb", "DMX_P2P_POOL_CAP_MB", None)
+        if pool_cap_mb is not None:
+            ring_cfg.p2p_pool_cap_bytes = int(pool_cap_mb) * 1024 * 1024
+        clone_slices = _cfg(ac, "dmx_clone_slices", "DMX_CLONE_SLICES", None)
+        if clone_slices is not None:
+            ring_cfg.clone_slices = bool(clone_slices)
+        elif sink is not None:
+            # A Python consumer may keep a slice past the next step.
+            ring_cfg.clone_slices = True
+        batch_submit = _cfg(ac, "dmx_batch_submit", "DMX_BATCH_SUBMIT", None)
+        if batch_submit is None:
+            batch_submit = bool(getattr(sink, "dmx_batch_submit", False))
+        if batch_submit:
+            ring_cfg.batch_submit = True
 
         # MonitoringEngine + ring transport.
-        engine = MonitoringEngine(
-            config=None,
-            model_id=resolved_model_id,
-            host_engine=host_engine,
-            ring_config=ring_cfg,
-        )
+        engine_kwargs = {}
+        if sink is not None:
+            engine_kwargs["ring_consumer"] = ring_consumer_for(sink)
+        try:
+            engine = MonitoringEngine(
+                config=None,
+                model_id=resolved_model_id,
+                host_engine=host_engine,
+                ring_config=ring_cfg,
+                **engine_kwargs,
+            )
+        except TypeError as exc:
+            if not engine_kwargs:
+                raise
+            raise RuntimeError(
+                "an in-process DMI sink requires DMI with in-process ring "
+                "consumers (MonitoringEngine ring_consumer)") from exc
 
         # Build the adaptor.  Hooks aren't installed yet -- that
         # happens in load_model after the model is materialized.
@@ -1625,10 +1905,66 @@ class DMXGPUWorker(Worker):
         # DMX_GPU_PADDING_STRIP=0 if needed for debugging.
         gpu_padding_strip = _cfg(
             ac, "dmx_gpu_padding_strip", "DMX_GPU_PADDING_STRIP", True)
+        selection = CaptureSelection(
+            request_gather=bool(_cfg(
+                ac, "dmx_request_gather", "DMX_REQUEST_GATHER", False)),
+            per_hook_request_gather=bool(_cfg(
+                ac, "dmx_per_hook_request_gather",
+                "DMX_PER_HOOK_REQUEST_GATHER", False)),
+            prefill_selection=bool(_cfg(
+                ac, "dmx_prefill_selection", "DMX_PREFILL_SELECTION", False)),
+            capture_mode=str(_cfg(
+                ac, "dmx_monitor_capture_mode", "DMX_MONITOR_CAPTURE_MODE",
+                "dynamic")),
+            inline_head_slots=int(_cfg(
+                ac, "dmx_inline_head_slots", "DMX_INLINE_HEAD_SLOTS", 0)),
+            inline_head_weight=str(_cfg(
+                ac, "dmx_inline_head_weight", "DMX_INLINE_HEAD_WEIGHT", "fp32")),
+            table_span_upload=bool(_cfg(
+                ac, "dmx_table_span_upload", "DMX_TABLE_SPAN_UPLOAD", True)),
+            gather_host_skip=bool(_cfg(
+                ac, "dmx_gather_host_skip", "DMX_GATHER_HOST_SKIP", True)),
+        )
+        planner = getattr(sink, "capture_planner", None)
+        if planner is not None:
+            if null_mode:
+                raise RuntimeError(
+                    "a capture planner cannot run with capture permanently disabled")
+            if selection.capture_mode == "static_full":
+                if self._dmx_node_toggle:
+                    raise RuntimeError("static-full capture forbids node toggling")
+            elif not (self._dmx_node_toggle and self._dmx_lazy_toggle):
+                raise RuntimeError(
+                    "a capture planner requires dmx_node_toggle and dmx_lazy_toggle")
+            selection.install_planner(planner)
+        elif selection.capture_mode == "static_full":
+            raise RuntimeError("static-full capture requires a capture planner")
         self.adaptor = VLLMAdaptor(
             engine, resolved_model_id, self.vllm_config,
-            gpu_padding_strip=bool(gpu_padding_strip))
+            gpu_padding_strip=bool(gpu_padding_strip),
+            selection=selection,
+            node_toggle=self._dmx_node_toggle,
+            allow_eager_fallback=bool(_cfg(
+                ac, "dmx_allow_eager_fallback", "DMX_ALLOW_EAGER_FALLBACK",
+                True)))
         self.adaptor.user_wants_null_mode = bool(null_mode)
+        self.adaptor.request_context_callback = getattr(
+            sink, "observe_request_context", None)
+        self._dmx_auto_finalize = bool(_cfg(
+            ac, "dmx_auto_finalize", "DMX_AUTO_FINALIZE", True)) and callable(
+                getattr(sink, "finalize_request", None))
+        self._dmx_finalize_drain_timeout_ms = int(_cfg(
+            ac, "dmx_finalize_drain_timeout_ms",
+            "DMX_FINALIZE_DRAIN_TIMEOUT_MS", 200))
+        self._dmx_finalize_max_steps = int(_cfg(
+            ac, "dmx_finalize_max_steps", "DMX_FINALIZE_MAX_STEPS", 8))
+        self._dmx_finalize_sweep_timeout_ms = int(_cfg(
+            ac, "dmx_finalize_sweep_timeout_ms",
+            "DMX_FINALIZE_SWEEP_TIMEOUT_MS", 5000))
+        self._dmx_pending_finalize = {}
+        self._dmx_live_requests = {}
+        self._dmx_finalize_timeouts = 0
+        self._dmx_finalize_waits = []
 
         # Enable null mode for warmup so producer kernels fire (CUDA
         # graph capture needs them) but no-op on the data path.  Cleared
@@ -1794,13 +2130,26 @@ class DMXGPUWorker(Worker):
         if self.adaptor is None:
             return
         self.adaptor.attach_model(
-            self.model_runner.model, hook_selection=self._dmx_hook_selection
+            self.model_runner.model, hook_selection=self._dmx_hook_selection,
+            **({} if self._dmx_hook_layers is None
+               else {"layer_set": self._dmx_hook_layers}),
         )
 
     def compile_or_warm_up_model(self) -> Any:
+        adaptor = self.adaptor
+        toggle = self._dmx_node_toggle and adaptor is not None
+        if toggle:
+            # Record producer nodes in exactly the captures warmup performs.
+            graph_toggle.begin_capture(
+                adaptor.ring_engine, device_toggle=self._dmx_device_toggle)
         # Warmup runs with null_mode=True (set in init_device).
         # Producer kernels fire but are no-ops -- ring stays clean.
-        result = super().compile_or_warm_up_model()
+        try:
+            result = super().compile_or_warm_up_model()
+        except BaseException:
+            if toggle:
+                graph_toggle.abort_capture(adaptor.ring_engine)
+            raise
 
         # Warmup done.  Turn off null mode unless the user explicitly
         # asked for permanent null mode.  set_null_mode does
@@ -1811,10 +2160,23 @@ class DMXGPUWorker(Worker):
         ):
             self.adaptor.engine.set_capture_enabled(True)
 
+        if toggle:
+            # Bind the captured full graphs and apply the static enabled set
+            # before the first served step (no replay is in flight).
+            graph_toggle.finish_capture(
+                self.model_runner.model, adaptor.ring_engine,
+                adaptor.transport, self._dmx_enabled_hooks,
+                lazy=self._dmx_lazy_toggle)
         return result
 
     @torch.inference_mode()
     def execute_model(self, scheduler_output: Any) -> Any:
+        result = self._execute_monitored(scheduler_output)
+        if self._dmx_auto_finalize:
+            self._dmx_finalize_finished(scheduler_output)
+        return result
+
+    def _execute_monitored(self, scheduler_output: Any) -> Any:
         # vLLM can send a final zero-token scheduler update after a request
         # finishes.  That path only retires scheduler state and never invokes
         # the model, so it remains safe after terminal monitoring shutdown.
@@ -1895,16 +2257,46 @@ class DMXGPUWorker(Worker):
         super().execute_dummy_batch()
 
     def stop_monitoring(self) -> None:
-        """Flush and stop DMI engine.  Reentrant: second call no-ops."""
+        """Deliver the tail, finalize the remaining requests, and stop the
+        DMI engine.  Reentrant: a second call after success no-ops.
+
+        With an in-process sink, a delivery barrier bounded by
+        ``dmx_finalize_sweep_timeout_ms`` runs first; when it times out or
+        the sink fails, this raises before anything is released, so the call
+        can be retried (``shutdown`` releases regardless)."""
+        if getattr(self, "_dmx_stopped", False):
+            return
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        if self.adaptor is not None and self._dmx_sink is not None:
+            status = self.dmx_drain_to_sink(self._dmx_finalize_sweep_timeout_ms)
+            if status == 1:
+                raise TimeoutError(
+                    "DMI monitoring shutdown timed out delivering tail data")
+            if status not in (0, -1):
+                raise RuntimeError(
+                    f"DMI monitoring shutdown delivery failed (status={status})")
+            if self._dmx_auto_finalize:
+                self._dmx_finalize_sweep(delivered=True)
+                self._dmx_finalize_unreported()
+                if self._dmx_pending_finalize:
+                    raise RuntimeError(
+                        "DMI monitoring shutdown has request completions the "
+                        "sink did not accept")
+        self._dmx_release()
+
+    def _dmx_release(self) -> None:
         if getattr(self, "_dmx_stopped", False):
             return
         self._dmx_stopped = True
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-
         if self.adaptor is not None:
+            if self._dmx_sink is not None:
+                self._dmx_stopped_sink_stats = self.dmx_sink_stats()
             adaptor = self.adaptor
             self.adaptor = None
+            if self._dmx_node_toggle:
+                from dmi import node_toggle
+                node_toggle.set_replay_guard(False)
             adaptor.close()
 
         if self._dmx_host_engine is not None:
@@ -1913,7 +2305,6 @@ class DMXGPUWorker(Worker):
             host_engine.raise_if_failed()
 
     def shutdown(self) -> None:
-        import logging
         if self.adaptor is not None:
             logging.getLogger(__name__).warning(
                 "DMI engine not explicitly stopped before shutdown. "
@@ -1926,7 +2317,217 @@ class DMXGPUWorker(Worker):
             logging.getLogger(__name__).exception(
                 "DMI monitoring shutdown reported a backend failure"
             )
+            try:
+                self._dmx_release()
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "DMI monitoring release reported a backend failure")
         super().shutdown()
+
+    # ------------------------------------------------------------------
+    # Request completion (in-process sinks with finalize_request)
+
+    def _dmx_finalize_finished(self, scheduler_output: Any) -> None:
+        """Finalize requests vLLM reports finished, after their last rows
+        reached the sink.
+
+        A finished request's final rows may still be in the ring, so once
+        any request is pending a delivery barrier (``dmx_drain_to_sink``)
+        runs; when it succeeds every pending request is finalized
+        ``valid=True``.  On a timeout the barrier is retried on later steps,
+        up to ``dmx_finalize_max_steps``, after which the request is
+        finalized ``valid=False`` (visible, never silently lost); a sink
+        failure does so at once.  Requests still pending at shutdown are
+        swept by ``stop_monitoring``.
+
+        vLLM reports a finish only in a later scheduler step, so requests
+        finishing in the last step are reported by the application
+        (``dmx_finalize_requests``) or swept at stop."""
+        if self.adaptor is None:
+            return
+        finished = getattr(scheduler_output, "finished_req_ids", None)
+        identities = self.adaptor._step_request_identities
+        self._dmx_live_requests.update(identities)
+        for rid in finished or ():
+            key = normalize_vllm_request_id(rid)
+            current = identities.get(key)
+            if current is not None and current != rid:
+                continue  # the notice belongs to an earlier use of the ID
+            self._dmx_pending_finalize.setdefault(key, self._dmx_finalize_max_steps)
+        if not self._dmx_pending_finalize:
+            return
+        started = time.monotonic()
+        status = self.dmx_drain_to_sink(self._dmx_finalize_drain_timeout_ms)
+        self._dmx_record_finalize_wait(time.monotonic() - started, status == 1)
+        if status == 0:
+            self._dmx_finalize_sweep(delivered=True)
+            return
+        for rid in list(self._dmx_pending_finalize):
+            self._dmx_pending_finalize[rid] -= 1
+            if status == 2 or self._dmx_pending_finalize[rid] <= 0:
+                self._dmx_finalize_one(rid, valid=False)
+
+    def _dmx_finalize_sweep(self, *, delivered: bool) -> None:
+        for rid in list(self._dmx_pending_finalize):
+            self._dmx_finalize_one(rid, valid=delivered)
+
+    def _dmx_finalize_unreported(self) -> None:
+        """At stop: requests observed but never reported finished are
+        finalized ``valid=False`` -- their completion is unknown."""
+        for rid in list(self._dmx_live_requests):
+            if rid not in self._dmx_pending_finalize:
+                self._dmx_pending_finalize[rid] = 0
+                self._dmx_finalize_one(rid, valid=False)
+
+    def _dmx_finalize_one(self, rid: str, valid: bool) -> None:
+        """Finalize one request; it leaves the pending set only once the sink
+        accepted it.  A request masked for any step of its life is finalized
+        ``valid=False`` (its capture is incomplete)."""
+        selection = self.adaptor.selection if self.adaptor is not None else None
+        tainted = selection is not None and selection.is_tainted(rid)
+        if tainted:
+            valid = False
+        try:
+            self._dmx_sink.finalize_request(rid, valid=valid)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "finalize_request(%r) raised; retrying later", rid)
+            return
+        self._dmx_pending_finalize.pop(rid, None)
+        self._dmx_live_requests.pop(rid, None)
+        if tainted:
+            selection.clear_taint(rid)
+
+    def _dmx_record_finalize_wait(self, seconds: float, timed_out: bool) -> None:
+        self._dmx_finalize_timeouts += int(timed_out)
+        waits = self._dmx_finalize_waits
+        waits.append(float(seconds))
+        if len(waits) > self._DMX_WAIT_CAP:
+            del waits[:len(waits) - self._DMX_WAIT_CAP]
+
+    # ------------------------------------------------------------------
+    # Worker RPCs (``collective_rpc``)
+
+    def dmx_drain_to_sink(self, timeout_ms: int = 0) -> int:
+        """Delivery barrier: flush the ring and wait until the consumer has
+        been handed every captured row.  Returns 0 delivered, 1 timeout,
+        2 consumer failure (a new consumer exception during the barrier, or
+        a latched failure), -1 no engine.  ``timeout_ms=0`` waits forever."""
+        adaptor = self.adaptor
+        engine = adaptor.ring_engine if adaptor is not None else None
+        if engine is None:
+            return -1
+        drain = getattr(engine, "drain_to_sink_and_wait", None)
+        if drain is None:
+            engine.flush_and_wait()
+            return -1
+        before = int(engine.submit_exceptions)
+        delivered = drain(int(timeout_ms))
+        if engine.sink_failed or int(engine.submit_exceptions) > before:
+            return 2
+        return 0 if delivered else 1
+
+    def dmx_finalize_requests(self, request_ids) -> dict:
+        """Finalize requests the application saw finish (for example in the
+        engine's outputs) without waiting for a later scheduler step.
+
+        One delivery barrier runs; on success each request is finalized
+        ``valid=True`` (``valid=False`` if it was masked), otherwise the
+        requests stay pending and the per-step retry applies."""
+        if not self._dmx_auto_finalize:
+            raise RuntimeError("the sink does not finalize requests")
+        for rid in request_ids:
+            key = normalize_vllm_request_id(str(rid))
+            self._dmx_pending_finalize.setdefault(key, self._dmx_finalize_max_steps)
+        status = self.dmx_drain_to_sink(self._dmx_finalize_drain_timeout_ms)
+        if status == 0:
+            self._dmx_finalize_sweep(delivered=True)
+        return {"status": status, "pending": sorted(self._dmx_pending_finalize)}
+
+    def dmx_flush(self) -> int:
+        """Deliver every captured row to the consumer now (bounded by
+        ``dmx_finalize_drain_timeout_ms``)."""
+        return self.dmx_drain_to_sink(self._dmx_finalize_drain_timeout_ms)
+
+    def dmx_sink_stats(self) -> dict:
+        """Consumer failures, finalize-barrier waits, the sink's drop
+        accounting (``drop_stats()``), and DMI's host telemetry."""
+        if self.adaptor is None and self._dmx_stopped_sink_stats is not None:
+            return dict(self._dmx_stopped_sink_stats)
+        engine = self.adaptor.ring_engine if self.adaptor is not None else None
+        stats = {
+            "submit_exceptions": 0, "last_sink_error": "", "sink_failed": False,
+            "finalize_timeouts": self._dmx_finalize_timeouts,
+            "finalize_waits": list(self._dmx_finalize_waits),
+        }
+        drop_stats = getattr(self._dmx_sink, "drop_stats", None)
+        if callable(drop_stats):
+            try:
+                stats["drops"] = drop_stats()
+            except Exception as exc:  # telemetry must not fail the RPC
+                stats["drops"] = {"error": repr(exc)}
+        try:
+            from dmi import sync_stats
+        except ImportError:
+            sync_stats = None
+        if sync_stats is not None and engine is not None:
+            snapshot = engine.get_stats()
+            stats["synchronization"] = sync_stats.synchronization_stats(
+                engine, snapshot=snapshot)
+            stats["pipeline"] = sync_stats.pipeline_stats(engine, snapshot=snapshot)
+            stats["gather"] = sync_stats.gather_sync_stats(self.adaptor)
+        if engine is not None and hasattr(engine, "submit_exceptions"):
+            stats.update(submit_exceptions=int(engine.submit_exceptions),
+                         last_sink_error=str(engine.last_sink_error),
+                         sink_failed=bool(engine.sink_failed))
+        return stats
+
+    def dmx_ring_stats(self) -> dict:
+        """Device payload-ring capacity, current free space and occupancy,
+        and pinned-staging capacity."""
+        if self.adaptor is None or self.adaptor.ring_engine is None:
+            return {"error": "no ring engine"}
+        engine = self.adaptor.ring_engine
+        cap = int(engine.payload_cap())
+        free = int(engine.available_capacity())
+        return {"payload_cap_bytes": cap, "available_bytes": free,
+                "occupancy_bytes": max(0, cap - free),
+                "staging_cap_bytes": int(engine.staging_cap())}
+
+    def dmx_set_request_mask(self, allowlist: Optional[Any] = None,
+                             capture_new: bool = True) -> dict:
+        """Capture only these requests from the next step (``None``: all).
+        See ``CaptureSelection.set_request_mask``."""
+        if self.adaptor is None:
+            raise RuntimeError("DMI adaptor is not initialized")
+        return self.adaptor.selection.set_request_mask(
+            allowlist, capture_new=capture_new,
+            normalize=normalize_vllm_request_id)
+
+    def dmx_set_hook_request_selection(self, rows, default=None,
+                                       token_windows=None) -> dict:
+        """Replace the per-request HookPoint selection before the next step.
+        See ``CaptureSelection.set_hook_request_selection``."""
+        if self.adaptor is None:
+            raise RuntimeError("DMI adaptor is not initialized")
+        return self.adaptor.selection.set_hook_request_selection(
+            rows, default, token_windows, normalize=normalize_vllm_request_id)
+
+    def dmx_inline_register(self, entries) -> dict:
+        """Register or retire in-graph head weight slots between steps."""
+        if self.adaptor is None:
+            raise RuntimeError("DMI adaptor is not initialized")
+        return self.adaptor.selection.inline_register(entries)
+
+    def dmx_request_mask_state(self) -> dict:
+        """Capture-selection state and cumulative counters."""
+        if self.adaptor is None:
+            raise RuntimeError("DMI adaptor is not initialized")
+        state = self.adaptor.selection.mask_state()
+        counts = getattr(self.adaptor, "capture_dispatch_state", None)
+        if callable(counts):
+            state["capture_dispatch"] = counts()
+        return state
 
 
 def _attach_dmi_internal(outputs, model_id, reader=None, handles=None):
@@ -2074,5 +2675,7 @@ __all__ = [
     "VLLMAdaptor",
     "DMXGPUWorker",
     "DMILLM",
+    "clear_sink_factory",
     "normalize_vllm_request_id",
+    "register_sink_factory",
 ]

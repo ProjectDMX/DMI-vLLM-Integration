@@ -683,6 +683,7 @@ def _runner(order=("B", "A"), computed=(7, 11)):
 
 def _armed_adaptor(scheduler_output):
     adaptor = VLLMAdaptor.__new__(VLLMAdaptor)
+    adaptor.engine = None
     adaptor._step_state = _VLLMStepState(
         phase=VLLMStepPhase.ARMED,
         scheduler_output=scheduler_output,
@@ -1139,6 +1140,7 @@ def _preflight_adaptor(
     enable_ep=False,
 ):
     adaptor = VLLMAdaptor.__new__(VLLMAdaptor)
+    adaptor.engine = None
     adaptor._step_state = _VLLMStepState(
         phase=VLLMStepPhase.ARMED
     )
@@ -1716,7 +1718,7 @@ class _Ring:
         self.result = result
         self.prepare_calls = []
 
-    def prepare_step(self, total_bytes, n_hooks):
+    def prepare_step(self, total_bytes, n_hooks, *, reserve=True):
         self.prepare_calls.append((total_bytes, n_hooks))
         return self.result
 
@@ -1747,6 +1749,7 @@ def _commit_adaptor(byte_capacity=80, task_capacity=8):
         total_rows=5,
     )
     adaptor = VLLMAdaptor.__new__(VLLMAdaptor)
+    adaptor.engine = None
     adaptor._step_state = _VLLMStepState(
         phase=VLLMStepPhase.LAYOUT_READY,
         scheduler_output=scheduler_output,
