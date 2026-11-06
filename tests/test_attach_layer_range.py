@@ -244,3 +244,54 @@ class TestOldDMICompatibility:
         with pytest.raises(_StopAfterSuper):
             adapter.attach_model(model, "full", layers=LayerSelection(1, 3))
         assert recorded[1] == {"layers": LayerSelection(1, 3)}
+
+
+class TestLayerSet:
+    """``dmx_hook_layers``: an arbitrary layer set, not only a range."""
+
+    def _select_set(self, layer_set):
+        from dmi_vllm_integration.dmi_api import HOOK_TYPE_FINAL_LN
+
+        def specs(model_wide=False):
+            return _hooks(8) + (HookSpec(HOOK_TYPE_FINAL_LN, None, layer_no=-1),)
+
+        return _VLLMHookSelection.from_model(
+            model=SimpleNamespace(get_hook_specs=specs), local_hooks=specs(),
+            hook_selection="full", cfg=_cfg(),
+            parallel_config=SimpleNamespace(tensor_parallel_size=1,
+                                            pipeline_parallel_size=1),
+            hf_config=SimpleNamespace(num_hidden_layers=8),
+            layer_set=layer_set)
+
+    def test_both_sides_keep_the_set_and_global_hooks(self):
+        selection = self._select_set(frozenset({1, 6}))
+        assert {s.layer_no for s in selection.local_hooks} == {-1, 1, 6}
+        for rank_set in selection.candidate_rank_hook_sets:
+            assert {s.layer_no for s in rank_set} <= {-1, 1, 6}
+
+    def test_attach_disables_hooks_outside_the_set(self, monkeypatch):
+        from dmi_vllm_integration.dmi_api import BackendAdaptor
+
+        hooks = [SimpleNamespace(enabled=True) for _ in range(4)]
+        specs = [HookSpec(HOOK_TYPE_RESID_PRE, hook, layer_no=layer)
+                 for layer, hook in enumerate(hooks)]
+        kept: list = []
+
+        class _Stop(Exception):
+            pass
+
+        def attach(self, model, hook_selection="full", **kwargs):
+            self.active_specs = list(specs)
+
+        def replace(self, new_specs):
+            kept.extend(new_specs)
+            raise _Stop()
+
+        monkeypatch.setattr(BackendAdaptor, "attach_model", attach)
+        monkeypatch.setattr(VLLMAdaptor, "replace_active_specs", replace)
+        adapter = VLLMAdaptor(SimpleNamespace(_ring_transport=object()), "m",
+                              SimpleNamespace(), gpu_padding_strip=False)
+        with pytest.raises(_Stop):
+            adapter.attach_model(SimpleNamespace(), "full", layer_set=frozenset({0, 2}))
+        assert [s.layer_no for s in kept] == [0, 2]
+        assert [h.enabled for h in hooks] == [True, False, True, False]

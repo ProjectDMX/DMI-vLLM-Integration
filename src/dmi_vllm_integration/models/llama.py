@@ -88,6 +88,8 @@ from dmi_vllm_integration.dmi_api import (
     HOOK_TYPE_TOKEN_IDS,
 )
 
+from dmi_vllm_integration.models.residual import resid_pre_from_norm
+
 
 class LlamaMLP(nn.Module):
     def __init__(
@@ -252,6 +254,9 @@ class LlamaAttention(nn.Module):
 
 
 class LlamaDecoderLayer(nn.Module):
+    # resid_pre observation (dmx_resid_pre_read); see models/residual.py.
+    _resid_pre_from_norm = False
+
     def __init__(
         self,
         vllm_config: VllmConfig,
@@ -306,6 +311,7 @@ class LlamaDecoderLayer(nn.Module):
             config.hidden_size, eps=config.rms_norm_eps
         )
 
+        self._resid_pre_from_norm = resid_pre_from_norm(vllm_config)
         # Hook points
         self.hook_resid_pre = HookPoint()
         self.hook_ln1 = HookPoint()
@@ -323,9 +329,11 @@ class LlamaDecoderLayer(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         # resid_pre: read-only capture, preserves fused norm
         if residual is not None:
-            if self.hook_resid_pre.enabled:
+            if self.hook_resid_pre.enabled and not self._resid_pre_from_norm:
                 self.hook_resid_pre(hidden_states + residual)
             hidden_states, residual = self.input_layernorm(hidden_states, residual)
+            if self.hook_resid_pre.enabled and self._resid_pre_from_norm:
+                self.hook_resid_pre(residual)
         else:
             if self.hook_resid_pre.enabled:
                 self.hook_resid_pre(hidden_states)

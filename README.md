@@ -125,6 +125,12 @@ curl --fail-with-body -X POST \
 If the server uses an API key, add
 `-H "Authorization: Bearer $VLLM_API_KEY"` to that request.
 
+Selective capture (per-request and per-HookPoint row tables), CUDA-graph node
+toggling, in-graph projection heads and in-process consumers registered with
+`dmi_vllm_integration.sinks.register_sink_factory` are described in
+[`docs/selective-capture.md`](docs/selective-capture.md). They run on the V1
+model runner and need a DMI build that includes those features.
+
 The official-vLLM behavior assumed by this release is documented in
 [`docs/vllm_contract.md`](docs/vllm_contract.md).
 The V2 integration points, block-table decision, and qualification evidence are

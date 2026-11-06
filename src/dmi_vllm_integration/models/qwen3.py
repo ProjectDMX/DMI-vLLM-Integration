@@ -73,6 +73,8 @@ from dmi_vllm_integration.dmi_api import (
     HOOK_TYPE_TOKEN_IDS,
 )
 
+from dmi_vllm_integration.models.residual import resid_pre_from_norm
+
 logger = init_logger(__name__)
 
 
@@ -209,6 +211,9 @@ class Qwen3Attention(nn.Module):
 
 
 class Qwen3DecoderLayer(nn.Module):
+    # resid_pre observation (dmx_resid_pre_read); see models/residual.py.
+    _resid_pre_from_norm = False
+
     def __init__(
         self,
         config: Qwen3Config,
@@ -260,6 +265,7 @@ class Qwen3DecoderLayer(nn.Module):
         self.post_attention_layernorm = RMSNorm(
             config.hidden_size, eps=config.rms_norm_eps
         )
+        self._resid_pre_from_norm = resid_pre_from_norm()
         self.hook_resid_pre = HookPoint()
         self.hook_ln1 = HookPoint()
         self.hook_attn_out = HookPoint()
@@ -276,9 +282,11 @@ class Qwen3DecoderLayer(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         # resid_pre: read-only capture, preserves fused norm
         if residual is not None:
-            if self.hook_resid_pre.enabled:
+            if self.hook_resid_pre.enabled and not self._resid_pre_from_norm:
                 self.hook_resid_pre(hidden_states + residual)
             hidden_states, residual = self.input_layernorm(hidden_states, residual)
+            if self.hook_resid_pre.enabled and self._resid_pre_from_norm:
+                self.hook_resid_pre(residual)
         else:
             if self.hook_resid_pre.enabled:
                 self.hook_resid_pre(hidden_states)

@@ -199,3 +199,24 @@ required TP multiple.
   waits for completion.
 - Worker processes and distributed runtime remain alive until that RPC
   completes and normal server teardown begins.
+
+## Selective capture and node toggling
+
+These apply only when the settings in
+[`selective-capture.md`](selective-capture.md) are enabled.
+
+- vLLM creates its CUDA graphs as `torch.cuda.CUDAGraph()` instances during
+  `compile_or_warm_up_model`, after DMI installs its `torch.cuda.CUDAGraph`
+  subclass, and creates no new graph after warmup.
+- The forward context's `cudagraph_runtime_mode` is `CUDAGraphMode.PIECEWISE`
+  exactly while a piecewise segment graph is captured.
+- A full-model graph is held by a `CUDAGraphWrapper` with
+  `runtime_mode == CUDAGraphMode.FULL` in `concrete_cudagraph_entries`
+  (entry attribute `cudagraph`), reachable from `model_runner.model` through
+  `runnable`; the mode returned by the batch dispatch is the mode that step
+  replays.
+- `scheduler_output.finished_req_ids` names requests that finished since the
+  previous scheduled step (it is not sent for a finish in the last step).
+- `input_batch.num_prompt_tokens` holds prompt lengths in packed request order.
+- Model execution runs on the stream current at the dispatch commit, so a
+  non-blocking host-to-device copy enqueued there precedes the forward.
